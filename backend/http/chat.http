@@ -1,0 +1,33 @@
+### 스트리밍 채팅
+POST http://localhost:8080/api/chat/stream
+Content-Type: application/json
+
+{
+  "message": "자기소개를 세 문장으로 해줘"
+}
+
+### 영어 (인코딩 문제 분리용)
+POST http://localhost:8080/api/chat/stream
+Content-Type: application/json
+
+{
+  "message": "Say hello in three short sentences."
+}
+
+### OpenRouter 직접 호출 — 모델 id 검증
+POST https://openrouter.ai/api/v1/chat/completions
+Authorization: Bearer {{openrouter_key}}
+Content-Type: application/json
+
+{
+  "model": "upstage/solar-pro4",
+  "messages": [{"role": "user", "content": "hi"}]
+}
+
+### 한국어 품질 확인
+POST http://localhost:8080/api/chat/stream
+Content-Type: application/json
+
+{
+  "message": "사내 공지용 문장이야. 다음을 정중한 존댓말로 다듬어줘: 이번주 금요일 서버 점검함. 오후 6시부터 8시까지 서비스 못씀."
+}

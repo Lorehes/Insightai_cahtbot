@@ -1,0 +1,33 @@
+# 저장소에는 LF 로 저장하고 체크아웃도 LF 로 통일한다.
+# OS 가 섞여도 줄바꿈만 바뀐 diff 가 생기지 않는다.
+* text=auto eol=lf
+
+# Windows 스크립트는 CRLF 여야 정상 동작한다
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 유닉스 스크립트
+*.sh text eol=lf
+mvnw text eol=lf
+
+# ── 바이너리: 줄바꿈 변환 금지 ──
+# D5 에 문서 픽스처(PDF/DOCX/HWP)를 테스트용으로 커밋하게 되면,
+# 이 지정이 없을 때 Git 이 텍스트로 오판해 파일을 깨뜨릴 수 있다.
+*.jar   binary
+*.war   binary
+*.zip   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.doc   binary
+*.docx  binary
+*.xls   binary
+*.xlsx  binary
+*.ppt   binary
+*.pptx  binary
+*.hwp   binary
+*.hwpx  binary

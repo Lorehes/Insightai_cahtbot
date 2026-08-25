@@ -1,0 +1,74 @@
+# 이 프로젝트는 .gitignore 를 루트 하나로 관리한다.
+# 규칙이 여러 파일에 흩어지면 충돌이 생기고, 무엇보다 비밀값 규칙을
+# 한 곳에서 전부 확인할 수 없게 된다.
+#
+# 예외: D3 이후 create-next-app 이 frontend/.gitignore 를 자동 생성한다.
+#       그건 도구 생성물이라 그대로 두되, 비밀값·자격증명 규칙은 이 파일에만 둔다.
+
+### Java / Maven ###
+HELP.md
+target/
+*.class
+*.jar
+# Maven Wrapper 의 jar 는 커밋하지 않는다 (Spring Initializr 기본 방침).
+# Wrapper 3.2+ 는 maven-wrapper.properties 만 두고 jar 를 첫 실행 때 내려받는다.
+# 위 *.jar 규칙이 이미 막고 있으므로 별도 예외를 두지 않는다.
+
+### IntelliJ IDEA ###
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+### VS Code ###
+.vscode/
+
+### Eclipse / STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### Node / Next.js ###
+node_modules/
+frontend/.next/
+frontend/out/
+.pnp
+.pnp.js
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+### 환경변수 (비밀값 — 절대 커밋 금지) ###
+# .env 로 시작하는 모든 변형을 막고 *.example 만 되살린다.
+# .env.prod / .env.production 처럼 새 파일이 생겨도 자동으로 막힌다.
+.env
+.env.*
+!.env.example
+!.env.*.example
+**/http-client.private.env.json
+
+### 자격증명 ###
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+credentials*.json
+secrets*.y*ml
+
+### 로그 ###
+*.log
+logs/
+
+### 업로드 산출물 ###
+uploads/
+
+### OS ###
+.DS_Store
+Thumbs.db

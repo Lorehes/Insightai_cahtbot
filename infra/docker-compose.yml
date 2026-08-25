@@ -1,0 +1,25 @@
+services:
+  db:
+    # 태그 고정. latest 를 쓰면 PG 메이저가 올라가면서 데이터 디렉터리 규약이 바뀌어 컨테이너가 안 뜬다.
+    #   0.25.4 = pg_search 버전, pg18 = PostgreSQL 18
+    # 업그레이드는 태그를 의도적으로 올리고 재색인 여부를 판단한 뒤에 한다.
+    image: paradedb/paradedb:0.25.4-pg18
+    container_name: chatbot-db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-chatbot}
+      POSTGRES_USER: ${DB_USER:-chatbot}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-chatbot}
+    ports:
+      - "5432:5432"
+    volumes:
+      # PostgreSQL 18+ 규약: /var/lib/postgresql/data 가 아니라 한 단계 위에 마운트한다.
+      # 이미지가 내부에 버전별 하위 디렉터리를 만들어 pg_upgrade 시 마운트 경계 문제를 피한다.
+      - chatbot-db-data:/var/lib/postgresql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-chatbot} -d ${DB_NAME:-chatbot}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  chatbot-db-data:

@@ -1,0 +1,76 @@
+spring:
+  application:
+    name: chatbot
+
+  # 응답 Content-Type 에 charset=UTF-8 을 강제로 붙인다 (CharacterEncodingFilter)
+  servlet:
+    encoding:
+      charset: UTF-8
+      force-response: true
+
+  # StringHttpMessageConverter 의 기본 charset (기본값이 ISO-8859-1 인 경로 대비)
+  http:
+    converters:
+      string-encoding-charset: UTF-8
+
+  # infra/.env 를 프로퍼티 소스로 읽는다.
+  # 터미널 실행 시 cwd=backend/, IntelliJ 실행 시 cwd=프로젝트 루트일 수 있어 두 경로를 모두 시도한다.
+  # [.properties] 로 파싱되므로 export/따옴표/백슬래시를 값에 쓰지 않는다.
+  config:
+    import:
+      - optional:file:../infra/.env[.properties]
+      - optional:file:./infra/.env[.properties]
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/chatbot}
+    username: ${DB_USER:chatbot}
+    password: ${DB_PASSWORD:chatbot}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate        # 스키마의 주인은 Flyway
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+  ai:
+    openai:
+      # Spring AI 2.0 = 공식 OpenAI Java SDK 래핑. baseUrl 에 /v1 을 포함한다.
+      base-url: ${OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
+      api-key: ${OPENROUTER_API_KEY}
+      chat:
+        model: ${CHAT_MODEL_DEFAULT}
+        temperature: 0.7
+      embedding:
+        model: ${EMBEDDING_MODEL:baai/bge-m3}
+
+    vectorstore:
+      pgvector:
+        table-name: vector_store_bgem3   # 기본값(vector_store)을 쓰지 않는다
+        dimensions: 1024                 # bge-m3
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        initialize-schema: false         # D5에 true 로 전환
+
+app:
+  auth:
+    mode: none                # none | works
+  search:
+    mode: vector              # vector | hybrid (D6)
+    top-k: 5
+    rrf-k: 60
+    weight-bm25: 0.5
+    weight-vector: 0.5
+  rerank:
+    enabled: false
+    model: ${RERANK_MODEL:cohere/rerank-v3.5}
+
+logging:
+  level:
+    art.insightai.chatbot: DEBUG
+    org.springframework.ai: INFO
+
+server:
+  port: 8080
