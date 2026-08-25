@@ -5,9 +5,13 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 
 /**
- * {@code @ConfigurationPropertiesScan} 은 이 패키지 하위의
- * {@code @ConfigurationProperties} 클래스를 자동 등록한다.
- * (AppProperties 를 개별로 @EnableConfigurationProperties 하지 않아도 된다)
+ * [Purpose] Application entry point.
+ * [Rationale] {@code @ConfigurationPropertiesScan} registers every
+ *   {@code @ConfigurationProperties} type under this package, so new property records do
+ *   not each need an explicit {@code @EnableConfigurationProperties} entry.
+ * [Caution] Component scanning is rooted at this package. Anything placed outside
+ *   {@code art.insightai.chatbot} compiles but is never registered, which surfaces as a
+ *   404 rather than a startup error.
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan

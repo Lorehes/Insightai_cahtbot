@@ -7,8 +7,18 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
-import org.springframework.http.codec.ServerSentEvent;
 
+/**
+ * [Purpose] Streams LLM answers to the client over Server-Sent Events.
+ * [Rationale] Chunks are emitted as JSON objects rather than raw strings for two reasons
+ *   verified during D1: (1) SSE consumes the single space after "data:" as a delimiter,
+ *   so a raw token " Friday" arrives as "Friday" and inter-word spacing is lost;
+ *   (2) Spring MVC overwrites the SSE Content-Type and drops any charset parameter
+ *   declared via @PostMapping(produces = ...), which corrupts non-ASCII text.
+ *   JSON serialization sidesteps both. See docs/chatbot-plan-v0.4.md section 6.1.
+ * [Caution] Response charset is forced by spring.servlet.encoding.force-response=true.
+ *   Removing that property brings the mojibake back even with JSON chunks.
+ */
 @RestController
 @RequestMapping("/api/chat")
 public class ChatController {
@@ -20,22 +30,21 @@ public class ChatController {
     }
 
     /**
-     * 토큰을 raw String 이 아니라 JSON 으로 감싸 흘린다.
-     *  - String 으로 보내면 SSE 응답에서 charset 이 떨어져 한글이 깨진다
-     *  - SSE 는 "data:" 뒤 첫 공백을 구분자로 소비하므로, raw String 은 단어 사이 공백을 잃는다
-     * 두 문제 모두 JSON 직렬화로 해결된다.
+     * [Purpose] D1 smoke endpoint proving the OpenRouter streaming path works end to end.
+     * [Caution] Stateless on purpose. Conversation persistence, ChatMemory and usage
+     *   accounting land in D2; do not build client features on this shape yet.
      */
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<ServerSentEvent<ChatChunk>> stream(@RequestBody ChatRequest request) {
+    public Flux<ChatChunk> stream(@RequestBody ChatRequest request) {
         return chatClient.prompt()
                 .user(request.message())
                 .stream()
                 .content()
-                .map(token -> ServerSentEvent.builder(new ChatChunk(token)).build());
+                .map(ChatChunk::new);
     }
 
     public record ChatRequest(String message) {}
 
-    /** D2 에 conversationId, finishReason, usage 를 여기에 추가한다. */
+    /** [Purpose] One streamed token. D2 adds conversationId, finishReason and usage. */
     public record ChatChunk(String delta) {}
 }
