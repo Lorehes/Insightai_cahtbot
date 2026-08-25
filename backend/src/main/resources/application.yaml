@@ -52,7 +52,9 @@ spring:
         dimensions: 1024                 # bge-m3
         index-type: HNSW
         distance-type: COSINE_DISTANCE
-        initialize-schema: false         # D5에 true 로 전환
+        initialize-schema: false         # 계속 false 유지 — Flyway가 테이블·인덱스를 만든다.
+                                          # true면 PgVectorStore가 임베딩 모델 교체 시 차원이
+                                          # 안 맞는 테이블을 조용히 만들 수 있다 (기획서 §5.1).
 
 app:
   auth:
