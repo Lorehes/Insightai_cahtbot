@@ -44,8 +44,14 @@ v0.3까지 "미확인" 또는 "확신도 80%"였던 항목들이 실측으로 �
 **② OpenRouter가 응답에 비용을 직접 실어준다**
 
 ```json
-"usage": { "prompt_tokens": 53, "completion_tokens": 10, "cost": 0.00000279,
-           "prompt_tokens_details": { "cached_tokens": 0, "cache_write_tokens": 0 } }
+{
+  "usage": {
+    "prompt_tokens": 53,
+    "completion_tokens": 10,
+    "cost": 0.00000279,
+    "prompt_tokens_details": { "cached_tokens": 0, "cache_write_tokens": 0 }
+  }
+}
 ```
 
 단가표를 들고 토큰을 곱할 필요가 없다. `messages.cost_usd`에 이 값을 그대로 넣으면 모델을 바꿔도 계산식을 고칠 일이 없다.
@@ -232,10 +238,17 @@ ERROR: a relation may only have one ParadeDB index
 raw String을 흘리면 인코딩이 깨지고 공백이 유실된다. **JSON으로 감싼다.**
 
 ```java
-@PostMapping(value = "...", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-public Flux<ChatChunk> stream(...) { ... .map(ChatChunk::new); }
+@PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+public Flux<ChatChunk> stream(@RequestBody ChatRequest request) {
+    return chatClient.prompt()
+            .user(request.message())
+            .stream()
+            .content()
+            .map(ChatChunk::new);
+}
 
-public record ChatChunk(String delta) {}   // D2에 conversationId, finishReason, usage 추가
+// D2 에 conversationId, finishReason, usage 를 추가한다
+public record ChatChunk(String delta) {}
 ```
 
 ```
@@ -273,7 +286,7 @@ spring:
 
 ### 7.1 D1 스파이크 실측
 
-```sql
+```text
 '연차'          → '연차휴가는 입사일을 기준으로...'        score 1.32   ✅ 부분어
 '회사'          → '...소프트웨어 개발 회사입니다.'         score 1.39   ✅ 조사 제거
 '인사이트에이아이' → 정답 3.99 / 무관한 행 1.18            ⚠ 노이즈
@@ -300,7 +313,11 @@ spring:
 
 ### 7.3 RRF 쿼리
 
-```sql
+> 아래는 설계 예시다. 실행되는 SQL 은 D2 의 Flyway 마이그레이션과 D6 의
+> `HybridDocumentRetriever` 에 들어간다. (IDE 가 데이터소스에 대고 테이블을
+> 해석하려 들지 않도록 코드펜스를 `text` 로 둔다)
+
+```text
 WITH bm25 AS (
   SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS r
   FROM vector_store_bgem3 WHERE content ||| :query LIMIT 20
