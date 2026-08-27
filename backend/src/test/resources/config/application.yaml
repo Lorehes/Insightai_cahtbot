@@ -1,0 +1,83 @@
+# ⚠ 경고: 이 파일을 지우거나 이름을 바꾸지 말 것. IntegrationTestBase를 상속하지 않는
+# @SpringBootTest(예: migration 패키지)와 IntelliJ 직접 실행이 실제 OpenRouter 키로 나갈 수 있게
+# 되는 통로를 이 파일 하나가 막고 있다(review 2026-08-27_document-ingestion-T4-round2.md High-1).
+# 지우면 art.insightai.chatbot.support.ConfigApplicationYamlAppliesOutsideIntegrationTestBaseTest
+# 가 즉시 실패한다 -- 그게 이 파일의 존재를 증명하는 유일한 회귀 감지 수단이다. 그 테스트를
+# 먼저 읽지 않고 이 파일을 수정하지 말 것.
+#
+# 프로파일이 없는(default) 테스트 클래스패스 설정 파일. Spring Boot가 활성 프로파일과 무관하게
+# 항상 로드하는 config-data 위치 중 하나("classpath:/config/", 기본 spring.config.location
+# 검색 목록의 일부)에 놓여 있다 -- application-test.yaml(프로파일 전용, @ActiveProfiles("test")
+# 로만 활성화됨)과 달리, IntegrationTestBase를 상속하지 않는 @SpringBootTest(예: 마이그레이션
+# 패키지의 스키마 검증 테스트)에도, 그리고 실행 방식(./mvnw test든 IntelliJ 직접 실행이든)과도
+# 무관하게 적용된다.
+#
+# [경로에 관한 실측 함정] 이 파일을 처음에는 src/test/resources/application.yaml(= classpath:/
+# application.yaml, config/ 서브디렉터리 없이)에 두었다가, ChunkRepositoryIntegrationTest 등
+# 이 카드와 무관한 기존 통합 테스트까지 전부 "Failed to determine a suitable driver class"로
+# 깨지는 것을 ./mvnw test 로 실측하고 나서 이 경로(config/ 서브디렉터리)로 옮겼다. 원인:
+# Maven의 테스트 클래스패스는 target/test-classes 가 target/classes 보다 먼저 오고,
+# classpath:/application.yaml 같은(와일드카드 없는) 단일 리소스 조회는 클래스로더가 "처음 찾은
+# 것 하나"만 반환한다 -- 즉 src/test/resources/application.yaml 이 src/main/resources/
+# application.yaml 을 "병합"하는 게 아니라 완전히 "가려버려서" DataSource·spring.config.import
+# (infra/.env) 등 그 파일에만 있던 모든 설정이 테스트 컨텍스트에서 통째로 사라졌다(실측:
+# HikariDataSource가 "suitable driver class"를 못 찾음 = spring.datasource.url이 비어 있었다는
+# 뜻). classpath:/config/application.yaml 은 그와 다른, 별개의 리소스 경로라 이런 충돌이 없다.
+#
+# 목적(review 2026-08-26_document-ingestion-T4.md High-2 재작업): 이전에는 실제 OpenRouter
+# base-url/api-key를 막는 더미 값이 application-test.yaml에만 있어, IntegrationTestBase를
+# 상속하지 않는 컨텍스트(예: migration 패키지의 스키마 검증 테스트)가 IntelliJ에서 직접 실행되면
+# (Surefire를 거치지 않아 pom.xml의 systemPropertyVariables 방어선도 없음) 실제 키가 그대로
+# 해석되는 통로가 있었다. 이 파일은 그 통로를 프로파일·실행 방식과 무관하게 막는다.
+#
+# [review 원문과의 의도적 차이] review는 spring.autoconfigure.exclude(OpenAiChatAutoConfiguration/
+# OpenAiEmbeddingAutoConfiguration)까지 이 파일로 옮기라고 지시했으나, 실측 결과(review
+# 2026-08-26_document-ingestion-T4.md 재작업 중 spring-ai-autoconfigure-vector-store-pgvector:
+# 2.0.1 소스를 직접 읽음) 그 배제를 프로파일 밖(=모든 컨텍스트)으로 옮기면
+# PgVectorStoreAutoConfiguration의 vectorStore 빈 메서드가 EmbeddingModel을 ObjectProvider 없는
+# 필수 파라미터로 요구하므로, StubEmbeddingModelConfig를 임포트하지 않는 기존 @SpringBootTest
+# (migration 패키지 등 -- 이번 카드 범위(support/ 패키지, application-test.yaml, pom.xml)
+# 밖이라 그 파일들을 IntegrationTestBase 하위로 옮기는 수정은 할 수 없음)가 컨텍스트 기동 자체에
+# 실패해 격리 강화가 아니라 회귀가 된다. 그래서 exclude는 application-test.yaml(프로파일 전용,
+# StubEmbeddingModelConfig/StubChatModelConfig가 그 자리를 대신 채우는 IntegrationTestBase
+# 하위 클래스에서만 활성화)에 그대로 남기고, 여기서는 "실제 빈이 뜨더라도 물리적으로 나갈 수
+# 없게"만 한다 -- review가 지적한 실제 문제(대상 테스트가 실제 키로 실제 호출을 시도할 수 있었다는
+# 것) 자체는 이 조합으로 완전히 막힌다. 어떤 컨텍스트에서도 실제 빈 자체가 아예 존재하지 않는
+# 구조적 보장까지 원한다면, test-scope AutoConfiguration.imports(SPI)로 스텁을 전역 자동구성하는
+# 별도 카드가 필요하다(이번 카드 범위 밖, dev-log follow_up에 기록).
+#
+# 공통 레벨(spring.ai.openai.*)뿐 아니라 모델 레벨(spring.ai.openai.chat.*, .embedding.*)도
+# 함께 못박는다 -- OpenAiAutoConfigurationUtil#resolveCommonProperties(spring-ai-autoconfigure-
+# model-openai:2.0.1 소스 실측, AbstractOpenAiProperties가 baseUrl/apiKey를 chat/embedding 양쪽
+# @ConfigurationProperties 클래스에 그대로 상속시킴도 함께 확인)가 모델 레벨 값이 존재하면
+# 공통 레벨보다 그것을 항상 우선 채택하므로, 공통 레벨만 막으면 모델 레벨 프로퍼티가 추가되는
+# 순간(review 2026-08-26_document-ingestion-T4.md security Medium-1) 이 방어선 전체가 조용히
+# 무력화된다.
+spring:
+  ai:
+    openai:
+      base-url: http://127.0.0.1:1
+      api-key: dummy-test-key-do-not-call-openrouter
+      chat:
+        base-url: http://127.0.0.1:1
+        api-key: dummy-test-key-do-not-call-openrouter
+      embedding:
+        base-url: http://127.0.0.1:1
+        api-key: dummy-test-key-do-not-call-openrouter
+
+# review 2026-08-27_document-ingestion-T4-round2.md Medium-E: pom.xml surefire의
+# systemPropertyVariables는 OPENROUTER_API_KEY까지 더미로 강제하는데(E5/eval 실호출 카드가 읽는
+# 원시 환경변수 이름 -- infra/.env 참고), 이 config-data 계층은 그동안 spring.ai.openai.* 6개
+# 키만 포이즌하고 이 키는 빠뜨려 surefire 계층과 비대칭이었다. 이 키를 직접 읽는 프로덕션 코드는
+# 현재 없으나(즉시 악용 경로 없음), 방어선 밖 미래 변경에 대비해 두 계층을 대칭으로 맞춘다.
+OPENROUTER_API_KEY: dummy-test-key-do-not-call-openrouter
+
+# review 2026-08-27_document-ingestion-T4-round2.md High-1: 위 spring.ai.openai.* 6개 키 +
+# OPENROUTER_API_KEY는 pom.xml surefire의 systemPropertyVariables가 JVM 시스템 프로퍼티로 동일
+# 값을 강제하기도 한다(Spring Boot 프로퍼티 우선순위: 시스템 프로퍼티 > config-data 파일). 그래서
+# ./mvnw test로 실행하면 이 파일을 통째로 지워도 그 값들은 시스템 프로퍼티로 그대로 남아, 이 파일
+# 자체가 실제로 로드됐는지는 그 키들만으로 구분할 수 없다. 아래 키는 surefire 어디에도 없으므로
+# 이 파일이 사라지면 즉시 null로 관측된다 -- 이 값만이 "이 파일이 실제로 로드됐다"는 것의 유일한
+# 자동화된 증거다. 프로덕션 코드와는 무관한 테스트 전용 표시자이며, 다른 목적으로 재사용하지 말 것.
+qa:
+  config-application-yaml-loaded: "true"

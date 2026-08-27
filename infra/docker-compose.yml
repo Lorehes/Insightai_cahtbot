@@ -6,15 +6,31 @@ services:
     image: paradedb/paradedb:0.25.4-pg18
     container_name: chatbot-db
     environment:
+      # DB_USER/DB_PASSWORD 는 컨테이너 부트스트랩 전용 슈퍼유저(POSTGRES_USER)다.
+      # 앱·Flyway 는 더 이상 이 계정을 쓰지 않는다 — init-db 스크립트가 만드는
+      # APP_DB_USER/APP_DB_PASSWORD 를 쓴다 (review 2026-08-25 High-1).
       POSTGRES_DB: ${DB_NAME:-chatbot}
       POSTGRES_USER: ${DB_USER:-chatbot}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-chatbot}
+      # 약한 기본값(:-chatbot 등)으로 조용히 기동되지 않도록 필수 변수로 강제한다.
+      # infra/.env 에 값이 없으면 compose 가 기동을 거부한다 (review 2026-08-25 High-1).
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD가 infra/.env에 설정되어야 합니다}
+      # init-db/01-bootstrap-extensions-and-app-role.sh 가 참조하는 앱 전용 비슈퍼유저
+      # 역할의 이름·비밀번호. 컨테이너 환경변수로 넘겨야 .sh 초기화 스크립트가 읽을 수 있다.
+      APP_DB_USER: ${APP_DB_USER:-chatbot_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD가 infra/.env에 설정되어야 합니다}
     ports:
-      - "5432:5432"
+      # 로컬호스트에만 바인딩한다. 이전에는 "5432:5432"(0.0.0.0 전체 인터페이스)라
+      # pg_hba scram-sha-256 + 약한 비밀번호 조합이면 원격에서 슈퍼유저로 접속 가능했다
+      # (review 2026-08-25 High-1). 앱은 IntelliJ/mvnw 로 같은 머신에서 localhost:5432 로만
+      # 접속하므로 이 좁힘으로 기능 손실이 없다.
+      - "127.0.0.1:5432:5432"
     volumes:
       # PostgreSQL 18+ 규약: /var/lib/postgresql/data 가 아니라 한 단계 위에 마운트한다.
       # 이미지가 내부에 버전별 하위 디렉터리를 만들어 pg_upgrade 시 마운트 경계 문제를 피한다.
       - chatbot-db-data:/var/lib/postgresql
+      # 컨테이너 최초 생성(빈 데이터 디렉터리) 시에만 1회 실행되는 부트스트랩 스크립트.
+      # 확장 생성 + 앱 전용 비슈퍼유저 역할 신설을 담당한다 (review 2026-08-25 High-1).
+      - ./init-db:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-chatbot} -d ${DB_NAME:-chatbot}" ]
       interval: 5s

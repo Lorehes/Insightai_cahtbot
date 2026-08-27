@@ -1,0 +1,62 @@
+# "test" 프로파일 전용 오버라이드. IntegrationTestBase 가 @ActiveProfiles("test") 로 활성화한다.
+# 목적(chat:AC-35, N-3, document-ingestion-T4): IntegrationTestBase 하위 컨텍스트에서 실제
+# OpenAiChatModel·OpenAiEmbeddingModel 빈 자체가 뜨지 않게 두 자동구성을 모두 배제한다 —
+# StubChatModelConfig/StubEmbeddingModelConfig 가 그 자리를 대신 채운다.
+#
+# [재작업 2026-08-26, review 2026-08-26_document-ingestion-T4.md High-2] 더미 base-url/api-key
+# (공통 레벨 + 모델 레벨)는 더 이상 여기 없다 — 프로파일이 없어 항상 로드되는
+# src/test/resources/config/application.yaml(비-프로파일 -- classpath:/application.yaml이 아니라
+# classpath:/config/application.yaml 위치를 쓰는 이유는 그 파일 상단 주석 참고, 같은 이름으로
+# src/main/resources/application.yaml을 완전히 가려버리는 실측 함정이 있었다)로 옮겼다. 이유:
+# 이 파일(application-test.yaml)은 @ActiveProfiles("test") 를 선언한 컨텍스트에만 적용되는데,
+# IntegrationTestBase 를 상속하지 않는 @SpringBootTest(예: migration 패키지의 스키마 검증
+# 테스트)는 그 프로파일을
+# 켜지 않으므로 이 파일 자체가 아예 로드되지 않는다 — 그 컨텍스트가 IntelliJ에서 직접 실행되면
+# (Surefire를 거치지 않아 pom.xml의 systemPropertyVariables 방어선도 없음) 실제 OpenRouter
+# base-url/api-key가 그대로 해석되는 구멍이 있었다. 반면 아래 autoconfigure.exclude는 그대로
+# 여기(프로파일 전용)에 남아 있다 — 이 배제를 비-프로파일 파일로 옮기면
+# PgVectorStoreAutoConfiguration의 vectorStore 빈 메서드가 EmbeddingModel을 ObjectProvider
+# 없는 필수 파라미터로 요구하므로(아래 배제 항목 주석 참고), StubEmbeddingModelConfig를
+# 임포트하지 않는 기존 컨텍스트가 전부 기동 자체에 실패하는 회귀가 생긴다 — 그래서 "실제 빈이
+# 아예 존재하지 않게" 만드는 이 배제는 스텁 빈을 함께 공급하는 IntegrationTestBase 하위 컨텍스트
+# 로 범위를 좁혀 유지하고, "실제 빈이 뜨더라도 나갈 수 없게" 만드는 포이즌 값만 모든 컨텍스트로
+# 넓혔다 — 자세한 판단 근거는 application.yaml(비-프로파일) 파일 상단 주석 참고.
+#
+# 우선순위 근거 (정정, 항목 10):
+# 1) application.yaml 의 spring.config.import(../infra/.env)로 들어오는 값보다 프로파일 전용
+#    파일(application-{profile}.yaml, 이 파일)이 항상 우선한다 — Spring Boot는 import된 문서를
+#    "그 import 를 선언한 문서 바로 아래" 순위에 꽂고, application.yaml(비-프로파일)은
+#    application-{profile}.yaml(프로파일 전용)보다 원래 낮은 순위이기 때문이다.
+# 2) 모델 레벨 프로퍼티(spring.ai.openai.chat.*, spring.ai.openai.embedding.*)는 그 값이
+#    존재하면 항상 공통 레벨(spring.ai.openai.*)보다 우선 채택된다 — 프로파일 우선순위와는
+#    무관한 별도의 규칙으로, spring-ai-autoconfigure-model-openai:2.0.1 의
+#    OpenAiAutoConfigurationUtil#resolveCommonProperties 소스에서 실측 확인했다(공통 값을
+#    기본값 삼아 모델 레벨 값이 있으면 그것으로 덮어씀). 그래서 application.yaml(비-프로파일)
+#    이 공통 레벨뿐 아니라 모델 레벨도 함께 포이즌한다.
+# 3) @TestPropertySource(예: V1InitSchemaIntegrationTest의 spring.flyway.enabled=false)는
+#    이 config-data 파일들보다도, pom.xml surefire의 systemPropertyVariables(JVM 시스템
+#    프로퍼티)보다도 우선한다 — spring-test:7.0.9 소스(TestPropertySourceUtils)에서
+#    addFirst(...)로 프로퍼티 소스 맨 앞에 꽂는 것을 실측 확인했다. 즉 어떤 테스트가
+#    @TestPropertySource로 spring.ai.openai.* 를 직접 지정하면 이 파일들의 포이즌 값도,
+#    surefire의 강제값도 전부 덮인다 — 그런 테스트를 새로 추가할 때는 이 사실을 알고 있어야
+#    한다(현재 이 프로젝트에는 그런 테스트가 없다).
+
+spring:
+  autoconfigure:
+    exclude:
+      # chat:AC-35 1차 방어선. 이 자동구성을 배제하면 실제 OpenAiChatModel 빈 자체가
+      # 컨텍스트에 생성되지 않는다 — StubChatModelConfig 가 그 자리를 대신 채운다
+      # (art.insightai.chatbot.support.StubChatModelConfig 참고. 없으면 ChatClient.Builder
+      # 자동구성이 ChatModel 빈을 찾지 못해 컨텍스트 기동 자체가 실패한다).
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiChatAutoConfiguration
+      # document-ingestion-T4: 이 자동구성을 배제하면 실제 OpenAiEmbeddingModel 빈이 컨텍스트에
+      # 생성되지 않는다 — StubEmbeddingModelConfig 가 그 자리를 대신 채운다
+      # (art.insightai.chatbot.support.StubEmbeddingModelConfig 참고). 단순 안전장치가 아니라
+      # 구조적 필수사항이다: PgVectorStoreAutoConfiguration의 vectorStore 빈 메서드는
+      # EmbeddingModel을 ObjectProvider 없는 필수 파라미터로 받으므로(spring-ai-autoconfigure-
+      # vector-store-pgvector:2.0.1 소스로 실측 확인), 이 배제 없이 실제 빈과 스텁 빈이
+      # 동시에 존재하면 EmbeddingModel 타입이 모호해져 컨텍스트 기동 자체가 실패한다. 이
+      # 배제가 IntegrationTestBase 하위 컨텍스트로만 한정되는 것도 바로 이 이유 때문이다 —
+      # StubEmbeddingModelConfig를 함께 공급하지 않는 컨텍스트에서 이 배제만 전역으로 걸면
+      # EmbeddingModel 빈이 아예 없어져 기동 자체가 실패한다(위 재작업 노트 참고).
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration

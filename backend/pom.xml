@@ -79,6 +79,15 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-tika-document-reader</artifactId>
         </dependency>
+        <!-- 하이브리드 RAG 파이프라인 : RetrievalAugmentationAdvisor / CompressionQueryTransformer /
+             DocumentRetriever(+VectorStoreDocumentRetriever) 전부 이 아티팩트 하나에 포함됨을
+             T1 스파이크가 로컬 jar 실측(jar tf + sources 직독)으로 확인했다 (hybrid-rag Spec T1).
+             spring-ai-vector-store-advisor 는 QuestionAnswerAdvisor 등만 담고 있어 이 파이프라인엔
+             불필요 — 추가하지 않는다. 버전은 spring-ai-bom(dependencyManagement)이 관리한다. -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-rag</artifactId>
+        </dependency>
 
         <!-- ===== 개발 편의 ===== -->
         <dependency>
@@ -173,7 +182,109 @@
                     </execution>
                 </executions>
             </plugin>
+            <!--
+                eval 태그(@Tag("eval")) 테스트는 실제 OpenRouter 호출을 수반한다.
+                기본 빌드(./mvnw test)에서는 제외하고, -Peval 프로파일에서만 돌린다.
+                excludedGroups가 groups보다 우선 적용되는 JUnit Platform 특성 때문에
+                -Dgroups=eval 오버라이드가 아니라 별도 Maven 프로파일로 분리한다.
+                (chat:AC-35 — 테스트 실행 중 OpenRouter 호출 0건 보호)
+
+                systemPropertyVariables: review 2026-08-25_chat-T2.md High-1 재작업.
+                IntegrationTestBase 상속(→ @ActiveProfiles("test") → application-test.yaml)은
+                opt-in이라 그걸 상속하지 않는 테스트 클래스(예: V1InitSchemaIntegrationTest)는
+                이 방어선 밖에 있다 — 실측(-Ddebug=true 자동구성 리포트)으로 해당 클래스가
+                실제 OpenAiChatAutoConfiguration을 살려 진짜 OpenAiChatModel 빈을 만든다는 것을
+                확인했다. Surefire 시스템 프로퍼티는 config-data 소스(프로파일 유무·상속 여부와
+                무관)보다 우선 적용되므로(단, @TestPropertySource보다는 낮다 — 아래 정정 항목
+                참고), 이 테스트 JVM 전체(=./mvnw test로 뜨는 모든 테스트 클래스)에 강제해 같은
+                실수가 다시 나도 구조적으로 막는다. application-test.yaml의 autoconfigure.exclude
+                (IntegrationTestBase 하위 컨텍스트 전용, 실제 빈 자체를 없앰)와
+                src/test/resources/config/application.yaml(비-프로파일, 모든 컨텍스트에 적용,
+                실제 빈이 뜨더라도 나갈 수 없게 함 — classpath:/application.yaml이 아니라
+                classpath:/config/application.yaml에 두는 이유는 그 파일 상단 주석 참고)은 이
+                전역 강제와 별개로 그대로 유지한다 — 세 계층이
+                각자 다른 실행 경로(mvnw test 전체 JVM / 프로파일 활성 컨텍스트 / 모든 컨텍스트)
+                를 담당해 겹쳐서 보호한다.
+
+                우선순위 정정 (review 2026-08-26_document-ingestion-T4.md 재작업 항목 10):
+                1) 모델 레벨 프로퍼티(spring.ai.openai.chat.*, spring.ai.openai.embedding.*)는
+                   존재하면 공통 레벨(spring.ai.openai.*)보다 항상 우선 채택된다 —
+                   spring-ai-autoconfigure-model-openai:2.0.1의
+                   OpenAiAutoConfigurationUtil#resolveCommonProperties 소스로 실측 확인. 그래서
+                   아래 systemPropertyVariables는 공통 레벨뿐 아니라 모델 레벨도 함께 강제한다
+                   (review security Medium-1 — 모델 레벨 프로퍼티가 미래에 추가되는 순간 공통
+                   레벨만으로는 조용히 무력화됨).
+                2) @TestPropertySource는 이 systemPropertyVariables보다도 우선한다 —
+                   spring-test:7.0.9의 TestPropertySourceUtils가 addFirst(...)로 프로퍼티 소스
+                   맨 앞에 꽂는 것을 실측 확인했다. 이 프로젝트에 spring.ai.openai.*를
+                   @TestPropertySource로 직접 지정하는 테스트는 현재 없다.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludedGroups>eval</excludedGroups>
+                    <systemPropertyVariables>
+                        <spring.ai.openai.base-url>http://127.0.0.1:1</spring.ai.openai.base-url>
+                        <spring.ai.openai.api-key>dummy-test-key-do-not-call-openrouter</spring.ai.openai.api-key>
+                        <spring.ai.openai.chat.base-url>http://127.0.0.1:1</spring.ai.openai.chat.base-url>
+                        <spring.ai.openai.chat.api-key>dummy-test-key-do-not-call-openrouter</spring.ai.openai.chat.api-key>
+                        <spring.ai.openai.embedding.base-url>http://127.0.0.1:1</spring.ai.openai.embedding.base-url>
+                        <spring.ai.openai.embedding.api-key>dummy-test-key-do-not-call-openrouter</spring.ai.openai.embedding.api-key>
+                        <OPENROUTER_API_KEY>dummy-test-key-do-not-call-openrouter</OPENROUTER_API_KEY>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- ./mvnw test -Peval : eval 태그 테스트만 실행. 기본 프로파일의 excludedGroups를 비워 우선순위 충돌을 피한다. -->
+        <profile>
+            <id>eval</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <!--
+                                combine.self="override" 필요: Maven의 Xpp3Dom 설정 병합은
+                                자식 엘리먼트가 self-closing(값 null)이면 부모 값을 그대로 채택한다.
+                                단순히 <excludedGroups/>만 쓰면 기본 프로파일의 eval 제외가 그대로 남는다.
+                            -->
+                            <excludedGroups combine.self="override"/>
+                            <groups>eval</groups>
+                            <!--
+                                [정정, review 2026-08-27_document-ingestion-T4-round2.md Medium-D]
+                                아래 <systemPropertyVariables combine.self="override"/> 는 기본
+                                프로파일이 강제하는 더미 base-url/api-key/OPENROUTER_API_KEY 시스템
+                                프로퍼티 상속을 끊는 것까지만 한다 — 그 이상은 아니다. 이 주석은
+                                한때 "그래서 infra/.env의 실제 값이 다시 적용된다"고 서술했으나 이는
+                                틀렸다: src/test/resources/config/application.yaml(비-프로파일,
+                                document-ingestion-T4 신설)이 spring.ai.openai.*(공통+chat+embedding)
+                                6개 키를 -Peval 여부와 무관하게 항상 강제한다 — Maven 프로파일은
+                                surefire *플러그인 설정*만 조건화할 뿐 테스트 *리소스*(그 파일이
+                                classpath에 있는지)는 조건화하지 않기 때문이다. 즉 이 시스템
+                                프로퍼티 계층을 비워도, config/application.yaml이 여전히 살아있는 한
+                                spring.ai.openai.base-url/api-key는 -Peval에서도 포이즌 상태
+                                그대로다(OPENROUTER_API_KEY만 시스템 프로퍼티에서 사라진다 — 그
+                                키는 config/application.yaml에도 있으므로 이 역시 여전히 포이즌).
+                                E5(실호출) 카드가 이 벽을 넘으려면 config-data 파일보다 우선순위가
+                                높은 경로가 필요하다 — @TestPropertySource(스프링 프로퍼티 소스
+                                중 최우선, 이 파일 상단 우선순위 정정 항목 3 참고) 또는
+                                @DynamicPropertySource로 해당 eval 테스트 클래스에 직접
+                                spring.ai.openai.{base-url,api-key} 및 .chat/.embedding 하위 값을
+                                infra/.env의 실제 값으로 재지정할 것. config/application.yaml 자체를
+                                수정하거나 조건부로 만들지 말 것 — 그 파일은 기본 빌드 전체의
+                                안전장치이며 eval 카드 하나를 위해 약화시키면 안 된다.
+                            -->
+                            <systemPropertyVariables combine.self="override"/>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
 </project>
