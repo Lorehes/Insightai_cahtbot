@@ -3,6 +3,7 @@ package art.insightai.chatbot.chat.service;
 import art.insightai.chatbot.chat.domain.Conversation;
 import art.insightai.chatbot.chat.domain.ConversationNotFoundException;
 import art.insightai.chatbot.chat.domain.ConversationQuotaExceededException;
+import art.insightai.chatbot.chat.domain.InvalidModelException;
 import art.insightai.chatbot.chat.domain.Message;
 import art.insightai.chatbot.chat.repository.ConversationRepository;
 import art.insightai.chatbot.chat.repository.MessageRepository;
@@ -25,9 +26,13 @@ import java.util.UUID;
  *   delete) calls the same check rather than re-deriving it from the repository query. Default
  *   model resolution (chat:AC-23) reads {@link AppProperties.Models#defaultId()} — the same
  *   fail-fast-validated value {@code ModelsController} exposes via {@code GET /api/models} — so a
- *   caller that omits {@code model} always gets a value already known to be a real catalog entry;
- *   this card does not otherwise validate a caller-supplied {@code model} string against the
- *   catalog (chat:AC-22 model whitelist enforcement is T7's scope, not this card's).
+ *   caller that omits {@code model} always gets a value already known to be a real catalog entry.
+ *   A caller-supplied {@code model} string is validated against {@link
+ *   AppProperties.Models#contains} in both {@link #createConversation} and {@link
+ *   #prepareMessageSend} (chat:AC-22, chat T7) — {@code null}/blank always skips that check and
+ *   falls back to a value already known valid (the catalog default, or the conversation's own
+ *   already-validated {@code model}), so the whitelist is only ever consulted for a value the
+ *   caller actually chose.
  * [Caution] {@link #createConversation}, {@link #listConversations} and {@link #getMessages} all
  *   take {@code userId} explicitly from the caller (the controller reads it from {@link
  *   art.insightai.chatbot.common.session.SessionContext} before calling in) rather than reaching
@@ -69,8 +74,10 @@ public class ConversationService {
      *   round 2, Low-2) — mirrors {@code AnonymousUserService#resolveOrCreate}'s equivalent
      *   [Caution]: while {@code userId} stays at the ceiling, every further create attempt logs
      *   again. If a file log sink ({@code logging.file.*}) is ever introduced, re-evaluate the
-     *   log volume this can produce.
-     * [AC] chat:AC-13, chat:AC-23
+     *   log volume this can produce. Also throws {@link InvalidModelException} instead of
+     *   inserting when a non-blank {@code model} does not match any {@code app.models[]}
+     *   catalog entry (chat:AC-22, chat T7).
+     * [AC] chat:AC-13, chat:AC-22, chat:AC-23
      */
     @Transactional
     public Conversation createConversation(UUID userId, String model, Boolean ragEnabled) {
@@ -80,6 +87,7 @@ public class ConversationService {
                     userId, maxConversationsPerUser);
             throw new ConversationQuotaExceededException(userId, maxConversationsPerUser);
         }
+        validateModelIfProvided(model);
         String resolvedModel = (model == null || model.isBlank())
                 ? appProperties.models().defaultId()
                 : model;
@@ -109,6 +117,33 @@ public class ConversationService {
     }
 
     /**
+     * [Purpose] T7's entry guard for {@code POST /api/conversations/{id}/messages}: confirms
+     *   ownership/non-deletion (chat:AC-17) and, when the caller supplies {@code model}, that it
+     *   is a catalog id (chat:AC-22) — both run synchronously and return before the controller
+     *   builds any {@code Flux} (Tech Review A-8: a reactive operator may run on a different
+     *   thread with no request context bound, so this check cannot live there).
+     * [Rationale] Reuses {@link #requireOwnedConversation}, the same guard {@link #getMessages}
+     *   already relies on, so GET and POST agree on what "not found" means for a given id
+     *   (chat:AC-17 covers both endpoints). {@code model == null || model.isBlank()} means the
+     *   caller wants the conversation's already-persisted (and already-validated-at-creation)
+     *   model, so no catalog check runs in that branch — mirrors {@link #createConversation}'s
+     *   own blank-model handling.
+     * [Side effects] None beyond the read: no {@code messages} row is written and no LLM is
+     *   called here (chat:AC-18, chat:AC-22) — T9 adds the actual streaming body behind this
+     *   guard.
+     * [Caution] Returns the resolved {@link Conversation}, not just the resolved model string,
+     *   because T9 (which replaces this method's caller with the real streaming body) needs the
+     *   entity's other fields (e.g. {@code ragEnabled}) too, not only the model id.
+     * [AC] chat:AC-17, chat:AC-18, chat:AC-22
+     */
+    @Transactional(readOnly = true)
+    public Conversation prepareMessageSend(UUID conversationId, UUID userId, String model) {
+        Conversation conversation = requireOwnedConversation(conversationId, userId);
+        validateModelIfProvided(model);
+        return conversation;
+    }
+
+    /**
      * [Purpose] Resolves {@code conversationId} for {@code userId}, throwing {@link
      *   ConversationNotFoundException} when the id is missing, owned by someone else, or
      *   soft-deleted — the three cases {@code findByIdAndUserIdAndDeletedAtIsNull} deliberately
@@ -117,5 +152,22 @@ public class ConversationService {
     private Conversation requireOwnedConversation(UUID conversationId, UUID userId) {
         return conversationRepository.findByIdAndUserIdAndDeletedAtIsNull(conversationId, userId)
                 .orElseThrow(() -> new ConversationNotFoundException(conversationId));
+    }
+
+    /**
+     * [Purpose] Throws {@link InvalidModelException} when {@code model} is non-blank and not a
+     *   catalog id; does nothing when {@code model} is {@code null}/blank.
+     * [Rationale] Extracted from {@link #createConversation} and {@link #prepareMessageSend},
+     *   which previously each ran the same {@code appProperties.models().contains(model)} check
+     *   inline (T7 review round 1, maintainability Low-1) — both callers treat "no model
+     *   supplied" identically (skip the check, resolve a fallback elsewhere), so the blank guard
+     *   belongs in one place. Mirrors this class's existing {@link #requireOwnedConversation}
+     *   extraction (T6).
+     * [AC] chat:AC-22
+     */
+    private void validateModelIfProvided(String model) {
+        if (model != null && !model.isBlank() && !appProperties.models().contains(model)) {
+            throw new InvalidModelException(model);
+        }
     }
 }

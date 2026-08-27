@@ -2,6 +2,7 @@ package art.insightai.chatbot.common.web;
 
 import art.insightai.chatbot.chat.domain.ConversationNotFoundException;
 import art.insightai.chatbot.chat.domain.ConversationQuotaExceededException;
+import art.insightai.chatbot.chat.domain.InvalidModelException;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -25,11 +26,12 @@ import java.util.List;
  *   ahead of any AC that exercised it and now handles {@code CreateConversationRequest.model}'s
  *   {@code @Size(max = 64)} (T6 review 2026-08-27, Medium-1). {@link
  *   ConversationQuotaExceededException} maps to 403, not 429 — see that class's [Rationale] for
- *   why (T6 review 2026-08-27, Medium-2).
- * [Caution] Do not add a handler here for {@code InvalidModelException} (chat:AC-22) until T7
- *   introduces that class — referencing a nonexistent type would fail compilation. Do not wire a
- *   domain exception's {@code getMessage()} directly into {@code ProblemDetail.detail} without
- *   checking what that message embeds first — {@link ConversationQuotaExceededException} used to
+ *   why (T6 review 2026-08-27, Medium-2). {@link InvalidModelException} maps to 400 (chat:AC-22,
+ *   chat T7) — its message is safe to echo verbatim (see that class's [Caution]), unlike {@code
+ *   ConversationQuotaExceededException}.
+ * [Caution] Do not wire a domain exception's {@code getMessage()} directly into {@code
+ *   ProblemDetail.detail} without checking what that message embeds first — {@link
+ *   ConversationQuotaExceededException} used to
  *   do exactly that and leaked its backing config key and numeric ceiling to an unauthenticated
  *   client (T6 review round 2, Medium-1; same pattern as T4's {@code
  *   AnonymousUserQuotaExceededException}, INC-007). Prefer a fixed client-facing string per
@@ -54,6 +56,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ConversationQuotaExceededException.class)
     public ProblemDetail handleConversationQuotaExceeded(ConversationQuotaExceededException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, CONVERSATION_QUOTA_EXCEEDED_CLIENT_MESSAGE);
+    }
+
+    @ExceptionHandler(InvalidModelException.class)
+    public ProblemDetail handleInvalidModel(InvalidModelException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

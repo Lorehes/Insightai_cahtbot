@@ -11,6 +11,7 @@ import art.insightai.chatbot.chat.repository.ConversationRepository;
 import art.insightai.chatbot.chat.repository.MessageRepository;
 import art.insightai.chatbot.common.config.AppProperties;
 import art.insightai.chatbot.support.IntegrationTestBase;
+import art.insightai.chatbot.support.StubChatModel;
 import com.jayway.jsonpath.JsonPath;
 import jakarta.servlet.http.Cookie;
 import java.time.OffsetDateTime;
@@ -35,7 +36,12 @@ import org.springframework.test.web.servlet.MvcResult;
  *   {@code GET /api/conversations} (chat:AC-14) and {@code GET /api/conversations/{id}/messages}
  *   (chat:AC-15), plus one direct check of the ownership guard {@link
  *   art.insightai.chatbot.chat.service.ConversationService#createConversation} and its siblings
- *   share ({@code ConversationNotFoundException} -> 404 via {@code GlobalExceptionHandler}).
+ *   share ({@code ConversationNotFoundException} -> 404 via {@code GlobalExceptionHandler}). T7's
+ *   additions (dev-qa-tester, 2026-08-27) cover {@code POST /api/conversations/{id}/messages}'
+ *   entry guard: cross-session 404 with zero LLM calls (chat:AC-18) and the model whitelist 400
+ *   on both the conversation-creation and message-send paths (chat:AC-22), asserting against the
+ *   shared {@link StubChatModel} bean's {@code capturedPrompts()} for the "zero LLM calls" half of
+ *   each claim rather than trusting the empty {@code Flux<ChatChunk>} response body alone.
  * [Rationale] Follows {@code SessionControllerIntegrationTest}'s pattern: {@link
  *   AutoConfigureMockMvc} over {@link IntegrationTestBase} so the real {@code
  *   FilterRegistrationBean<AnonymousSessionFilter>} and {@code SessionContext} wiring run, and
@@ -61,10 +67,17 @@ import org.springframework.test.web.servlet.MvcResult;
  *   rather than the repositories under test, mirroring {@code MessageRepositoryIntegrationTest}'s
  *   reasoning: a save/find bug under test must not also break teardown. The bonus 404 test at the
  *   bottom deliberately carries no {@code [chat:AC-17]} prefix — AC-17 covers three endpoints
- *   ({@code GET .../messages}, {@code DELETE}, {@code POST .../messages}) across T6 and T7, and
- *   only the first exists yet; marking AC-17 verified from one endpoint would misrepresent the
- *   evidence ledger. It exists only to confirm the ownership-guard mechanism this card built
- *   ({@code ConversationService#requireOwnedConversation}) behaves as designed, not to close AC-17.
+ *   ({@code GET .../messages}, {@code DELETE}, {@code POST .../messages}) across T6/T7/T8, and
+ *   only the first two of those three exist as of T7 ({@code DELETE} is T8's scope); marking
+ *   AC-17 verified from partial endpoint coverage would misrepresent the evidence ledger. The T7
+ *   test below ({@code rejectsMessageSendForAnotherSessionsConversationWithoutCallingLlm}) follows
+ *   this same precedent for the same reason: it carries only the {@code [chat:AC-18]} prefix, not
+ *   {@code [chat:AC-17]}, even though it exercises the same ownership guard against the
+ *   {@code POST .../messages} endpoint — dev-qa-tester (2026-08-27) leaves AC-17 itself at ⬜
+ *   until T8 adds a {@code DELETE}-endpoint case alongside this class's existing GET one and this
+ *   one. AC-18's own text ("AC-17의 POST 호출에서 LLM 호출이 발생하지 않는다") is a standalone,
+ *   fully-testable claim about that one scenario regardless of AC-17's overall closure, so it is
+ *   tagged and counted normally.
  */
 @AutoConfigureMockMvc
 @TestPropertySource(properties = "app.session.max-anonymous-users=100000")
@@ -84,6 +97,9 @@ class ConversationControllerIntegrationTest extends IntegrationTestBase {
 
     @Autowired
     private AppProperties appProperties;
+
+    @Autowired
+    private StubChatModel stubChatModel;
 
     private final List<UUID> insertedConversationIds = new ArrayList<>();
     private final List<UUID> insertedUserIds = new ArrayList<>();
@@ -340,6 +356,103 @@ class ConversationControllerIntegrationTest extends IntegrationTestBase {
                 "SELECT count(*) FROM conversations WHERE user_id = ? AND deleted_at IS NULL",
                 Long.class, sessionA.userId());
         assertThat(conversationCount).isEqualTo(maxConversationsPerUser);
+    }
+
+    @Test
+    @DisplayName("[chat:AC-18] 타인 소유 대화에 POST /api/conversations/{id}/messages 를 호출하면 404를 반환하고 "
+            + "LLM 호출이 발생하지 않으며 세션 B의 conversations·messages 행이 변하지 않는다 "
+            + "(AC-17 전체 -- GET/DELETE/POST 세 엔드포인트 -- 검증은 DELETE가 추가되는 T8 소관)")
+    void rejectsMessageSendForAnotherSessionsConversationWithoutCallingLlm() throws Exception {
+        // given: session B owns a conversation that already has one message, so "unchanged" has
+        //   something concrete to compare against instead of trivially staying at zero
+        Session sessionA = establishSession();
+        Session sessionB = establishSession();
+        Conversation othersConversation = saveConversation(sessionB.userId(), "upstage/solar-pro4", false);
+        saveMessage(othersConversation.getId(), "user", "already here");
+        stubChatModel.reset();
+
+        OffsetDateTime updatedAtBefore = jdbcTemplate.queryForObject(
+                "SELECT updated_at FROM conversations WHERE id = ?", OffsetDateTime.class, othersConversation.getId());
+        Long messageCountBefore = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM messages WHERE conversation_id = ?", Long.class, othersConversation.getId());
+
+        // when
+        mockMvc.perform(post("/api/conversations/{id}/messages", othersConversation.getId())
+                        .cookie(new Cookie("chatbot_sid", sessionA.cookieValue()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"안녕\"}"))
+                .andExpect(status().isNotFound());
+
+        // then: session B's conversations.updated_at and messages row count are unchanged --
+        //   this does NOT cover title/deleted_at/model or existing messages.content, so it is not
+        //   a byte-for-byte snapshot (2026-08-27 chat T7 리뷰 correctness Low-1); this endpoint's
+        //   code path performs no writes at all, so the residual risk is negligible, but a full
+        //   snapshot comparison is recommended when AC-17 is finally confirmed in T8
+        OffsetDateTime updatedAtAfter = jdbcTemplate.queryForObject(
+                "SELECT updated_at FROM conversations WHERE id = ?", OffsetDateTime.class, othersConversation.getId());
+        Long messageCountAfter = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM messages WHERE conversation_id = ?", Long.class, othersConversation.getId());
+        assertThat(updatedAtAfter).isEqualTo(updatedAtBefore);
+        assertThat(messageCountAfter).isEqualTo(messageCountBefore);
+
+        // then: the shared StubChatModel recorded zero prompts -- structural proof of zero LLM calls
+        assertThat(stubChatModel.capturedPrompts()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("[chat:AC-22] 카탈로그에 없는 model로 POST /api/conversations 를 호출하면 "
+            + "400을 반환하고 conversations 행이 생성되지 않는다")
+    void rejectsConversationCreationWithUnknownModel() throws Exception {
+        // given
+        Session sessionA = establishSession();
+        Long conversationCountBefore = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM conversations WHERE user_id = ?", Long.class, sessionA.userId());
+
+        // when
+        MvcResult result = mockMvc.perform(post("/api/conversations")
+                        .cookie(new Cookie("chatbot_sid", sessionA.cookieValue()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"model\":\"not-a-real-model\"}"))
+                .andExpect(status().isBadRequest())
+                .andReturn();
+
+        // then: RFC 9457 ProblemDetail body carries status 400, and no row was inserted
+        Integer problemStatus = JsonPath.read(result.getResponse().getContentAsString(), "$.status");
+        assertThat(problemStatus).isEqualTo(400);
+        Long conversationCountAfter = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM conversations WHERE user_id = ?", Long.class, sessionA.userId());
+        assertThat(conversationCountAfter).isEqualTo(conversationCountBefore);
+    }
+
+    @Test
+    @DisplayName("[chat:AC-22] 카탈로그에 없는 model로 POST /api/conversations/{id}/messages 를 호출하면 "
+            + "400을 반환하고 LLM 호출이 발생하지 않으며 messages 행이 생성되지 않는다")
+    void rejectsMessageSendWithUnknownModelWithoutCallingLlmOrPersisting() throws Exception {
+        // given: the conversation itself was created with a valid model -- only the per-message
+        //   override in this request is invalid
+        Session sessionA = establishSession();
+        Conversation conversation = saveConversation(sessionA.userId(), "upstage/solar-pro4", false);
+        stubChatModel.reset();
+
+        // when
+        MvcResult result = mockMvc.perform(post("/api/conversations/{id}/messages", conversation.getId())
+                        .cookie(new Cookie("chatbot_sid", sessionA.cookieValue()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"안녕\",\"model\":\"not-a-real-model\"}"))
+                .andExpect(status().isBadRequest())
+                .andReturn();
+
+        // then: RFC 9457 ProblemDetail body carries status 400
+        Integer problemStatus = JsonPath.read(result.getResponse().getContentAsString(), "$.status");
+        assertThat(problemStatus).isEqualTo(400);
+
+        // then: no messages row was written for this conversation
+        Long messageCount = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM messages WHERE conversation_id = ?", Long.class, conversation.getId());
+        assertThat(messageCount).isEqualTo(0L);
+
+        // then: the shared StubChatModel recorded zero prompts -- structural proof of zero LLM calls
+        assertThat(stubChatModel.capturedPrompts()).isEmpty();
     }
 
     /**

@@ -214,6 +214,19 @@ public record AppProperties(
             }
         }
 
+        /**
+         * [Purpose] Whether {@code id} matches one of {@link #items}' catalog ids.
+         * [Rationale] Backs chat:AC-22's model whitelist check wherever a caller-supplied model
+         *   string needs validating — {@code ConversationService#createConversation} and {@code
+         *   ConversationService#prepareMessageSend} (both chat T7) call this instead of each
+         *   re-deriving the same {@code anyMatch} the compact constructor above already uses for
+         *   {@code defaultId}.
+         * [AC] chat:AC-22
+         */
+        public boolean contains(String id) {
+            return items.stream().anyMatch(item -> item.id().equals(id));
+        }
+
         /** [Purpose] One selectable model: OpenRouter id plus a human-readable label. */
         public record ModelEntry(String id, String displayName) {}
     }
