@@ -1,0 +1,8 @@
+# Test fixture only — fictional placeholder content, NOT the real company eval-set.
+# Second item deliberately has none of expect_source/expect_contains/expect (AC-2 negative case).
+
+- question: "이 픽스처 챗봇은 언제 만들어졌어?"
+  expect_source: "dummy-fixture.pdf"
+  expect_contains: ["2026"]
+
+- question: "필수 필드가 하나도 없는 항목"

@@ -1,0 +1,23 @@
+# Test fixture only — fictional placeholder content, NOT the real company eval-set.
+# The real eval-set.yaml (20 items, R4-gated) lives outside the repo at
+# {DOC_ROOT}/docs/eval/eval-set.yaml and is created by card E1.
+# Intentionally 3 found + 2 not-found (not 20/15/5) — this fixture verifies EvalSetLoader's
+# classification logic for an arbitrary item count (eval-usage-dashboard:AC-1, see card E2 note).
+
+- question: "이 픽스처 챗봇은 언제 만들어졌어?"
+  expect_source: "dummy-fixture.pdf"
+  expect_contains: ["2026"]
+
+- question: "이 픽스처 챗봇의 별명은 뭐야?"
+  expect_source: "dummy-fixture.pdf"
+  expect_contains: ["인사이트봇", "챗봇"]
+
+- question: "이 픽스처 챗봇의 상징 색깔은?"
+  expect_source: "다른-더미.pdf"
+  expect_contains: ["파란색"]
+
+- question: "이 픽스처 챗봇이 좋아하는 음식은?"
+  expect: NOT_FOUND
+
+- question: "이 픽스처 챗봇의 취미는?"
+  expect: NOT_FOUND
