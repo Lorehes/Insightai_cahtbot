@@ -2,12 +2,16 @@ package art.insightai.chatbot.support;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import javax.sql.DataSource;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.env.Environment;
+
+import com.zaxxer.hikari.HikariDataSource;
 
 /**
  * [Purpose] Permanent regression probe proving {@code classpath:/config/application.yaml}
@@ -70,6 +74,28 @@ import org.springframework.core.env.Environment;
  * deleted (the system-property layer backfills the same values); only the canary assertion is
  * immune to that masking under Maven, but bypassing Surefire for the manual check makes the
  * first assertion regress too, which is the stronger and more legible proof.
+ * <p>
+ * [2026-08-28, review 2026-08-28_X1-test-pool-size-round2.md correctness Low-3] This class was
+ * also the cheapest place to close a second, unrelated gap in the same file: the X1 card's
+ * {@code spring.datasource.hikari.maximum-pool-size}/{@code connection-timeout} keys (added below
+ * the poison block) had no regression probe at all -- unlike the seven keys above, nothing failed
+ * if they were deleted or their indentation slipped into the wrong YAML mapping (this file has a
+ * prior {@code duplicate key spring} incident from X1 round 1). {@link
+ * #hikariPoolIsExplicitlyBoundToTheDocumentedTestValues()} closes that gap by asserting against
+ * the live {@link HikariDataSource} bean rather than {@link Environment#getProperty}: this context
+ * (unlike {@code ParadeDbBm25SearchAdapterIntegrationTest}, the only place in this module that
+ * wraps a {@code DataSource} in {@code support.CountingDataSource}) never replaces the
+ * Spring-Boot-managed {@code DataSource} bean, so the injected instance is the same object Hikari
+ * itself pools connections through -- proving "the property resolves" AND "the pool actually
+ * applied it", not just the former.
+ * <p>
+ * [2026-08-28, review 2026-08-28_X1-test-pool-size-round3.md Medium-2] {@code minimum-idle} was
+ * initially left unasserted above because a parallel card was still deciding its value; that
+ * card confirmed {@code 1}, so this class now asserts it too. It was the one key among the three
+ * where an omission was not a neutral gap: without a probe, deleting the YAML line does not fail
+ * any test -- {@code HikariConfig.java:1137-1139} silently re-derives {@code minIdle =
+ * maxPoolSize} and the pool reverts exactly to the state round2 High-1 flagged, with nothing here
+ * to catch it.
  */
 @SpringBootTest
 @ExtendWith(DatabaseGuardExtension.class)
@@ -77,6 +103,9 @@ class ConfigApplicationYamlAppliesOutsideIntegrationTestBaseTest {
 
     @Autowired
     private Environment environment;
+
+    @Autowired
+    private DataSource dataSource;
 
     @Test
     @DisplayName("IntegrationTestBase를 상속하지 않아도 config/application.yaml의 포이즌 값이 적용된다")
@@ -119,5 +148,33 @@ class ConfigApplicationYamlAppliesOutsideIntegrationTestBaseTest {
         // actually regresses when config/application.yaml is deleted or renamed.
         assertThat(environment.getProperty("qa.config-application-yaml-loaded"))
                 .isEqualTo("true");
+    }
+
+    @Test
+    @DisplayName("HikariCP 풀 상한과 커넥션 타임아웃이 config/application.yaml에 명시된 값으로 실제 바인딩된다")
+    void hikariPoolIsExplicitlyBoundToTheDocumentedTestValues() {
+        // given: this context's DataSource bean is never wrapped (see class Javadoc) -- casting
+        // straight to HikariDataSource, rather than reading the raw property via Environment,
+        // proves the value actually reached the pool Hikari hands connections out from, not just
+        // that a property source resolves it.
+        assertThat(dataSource)
+                .as("DataSource bean must be the Spring-Boot-managed HikariDataSource for this "
+                        + "assertion to prove the pool -- not just a property source -- picked up "
+                        + "config/application.yaml's values")
+                .isInstanceOf(HikariDataSource.class);
+        HikariDataSource hikari = (HikariDataSource) dataSource;
+
+        // then: hardcoded, intentionally -- config/application.yaml:67-97 documents an extensive,
+        // measured rationale for exactly 3, exactly 1, and exactly 5000ms (review
+        // 2026-08-28_X1-test-pool-size.md Medium-2/3, round2 High-1, round3 Medium-1/2). The
+        // arithmetic itself is not re-quoted here -- see that YAML comment block, not this one,
+        // for the current numbers; duplicating it in two places is exactly how round 3 found a
+        // stale copy (review 2026-08-28_X1-test-pool-size-round3.md Low-3). A future change to
+        // any of the three numbers is a deliberate act that must revisit that YAML rationale, not
+        // a silent drift -- so this test is meant to break and force a conscious update alongside
+        // the YAML comment, rather than loosely accepting "anything but the framework default".
+        assertThat(hikari.getMaximumPoolSize()).isEqualTo(3);
+        assertThat(hikari.getMinimumIdle()).isEqualTo(1);
+        assertThat(hikari.getConnectionTimeout()).isEqualTo(5000L);
     }
 }

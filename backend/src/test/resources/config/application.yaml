@@ -64,6 +64,45 @@ spring:
       embedding:
         base-url: http://127.0.0.1:1
         api-key: dummy-test-key-do-not-call-openrouter
+  # [X1, 2026-08-28, round 2] 테스트 전용 HikariCP 상한. ./mvnw test 전체 회귀가 커넥션 슬롯
+  # 고갈로 결정론적으로 실패(291건 중 2건) -- 원인은 경합이 아니라 컨텍스트 캐시 누적
+  # (@SpringBootTest 21개 클래스 실측, 20개는 자동 마이그레이션·1개(V1InitSchemaIntegrationTest)
+  # 만 직접 migrate() 호출; 컨텍스트 분기 수는 11개(review round3 실측 확정), 최악값 21로
+  # 계산해도 결론 유지).
+  # 비-프로파일 파일에 두는 이유는 IntegrationTestBase 밖 컨텍스트도 여기서 실제 DataSource를
+  # 얻기 때문 -- 회귀 감지: ConfigApplicationYamlAppliesOutsideIntegrationTestBaseTest.
+  # [값=3] pool=1 실측(V1InitSchemaIntegrationTest의 migrate()가 "total=1, active=1"로
+  # 타임아웃)이 migrate() 1회가 main+migration 두 물리 커넥션을 동시에 요구함(필요량 2)을
+  # 확정했다. "정확히 2"는 1R의 pool=2 실행(BackendApplicationTests·SessionControllerIntegration
+  # Test 전부 PASS, 둘 다 자동 마이그레이션 경로)이 피크 ≤ 2임을 보여준 데서 온다. PostgreSQL
+  # Database(flyway-database-postgresql-12.4.0-sources.jar:114)는 useSingleConnection()을
+  # 오버라이드하지만 flyway.postgresql.transactional.lock 기본값(true)에서 반환값은 base
+  # Database 기본값과 동일한 false -- 오버라이드는 존재하나 이 프로젝트 설정에선 효과가 base와
+  # 같다(1R의 "미오버라이드" 서술은 flyway-core sources만 검색해 부정확했음, review
+  # 2026-08-28_X1-test-pool-size-round2.md Medium-1). [round3 Low-1] false 명시 시
+  # useSingleConnection()=true -> Database.java:305-306이 커넥션 재사용, 필요량 2->1(미사용,
+  # 값 변경 아님, 후보 기록). 필요량 2 + 여유 1 = 3 -- 21×3=63<97은 값 3의 보수적 상한 확인,
+  # 실측 피크는 아래 minimum-idle 절 참고. 되돌리려면 세 키를 지우면 기본값(10,
+  # minIdle=maxPoolSize 보정, 30s)으로 복귀 -- 재발 시 값보다 컨텍스트 분기 수 증가를 먼저
+  # 의심할 것. 조사 경과 상세는 dev-log 참고.
+  datasource:
+    hikari:
+      maximum-pool-size: 3
+      # [round3, 실측] 컨텍스트 11개 x 상주 2 + 감시 세션 1 = 23 -- 1초 간격 pg_stat_activity
+      # 샘플링 실측(2026-08-28 11:49 배타 창). minimum-idle=1의 효과는 위 필요량 2의 생성을 막는
+      # 게 아니라 fillPool(HikariPool.java:525-534)의 선제 충전을 3->1로 줄이는 것 -- 2번째
+      # 커넥션은 여전히 만들어지고 idleTimeout 기본 10분(HikariConfig.java:53,125) 안에는
+      # 회수도 안 된다. [round3 Low-2] "무관한 손잡이"가 아니라 "아직 안 당긴 손잡이" -- 하한
+      # 10000ms(HikariConfig.java:1145)로 주면 피크가 낮아질 수 있음(미검증, 지금은 미변경,
+      # 재발 시 1순위 후보). 여유는 (97-1)/2 ~= 48개 컨텍스트까지(현재 11개, 단위는 클래스가
+      # 아니라 캐시된 컨텍스트).
+      minimum-idle: 1
+      # 기본 30s → 5s. pool=1 실험에서 5006ms 만에 실패한 실측(dev-log)이 근거이며 제시 범위
+      # (5~10초)의 하한이다. loginTimeout도 같이 30s→5s로 낮아진다(HikariCP PoolBase.java:
+      # 641-643) -- 콜드스타트로 SQLTransientConnectionException이 관측되면 8~10초 상향을
+      # 검토할 것, 지금은 바꾸지 않는다(review 2026-08-28_X1-test-pool-size-round2.md
+      # L-2/L-4/L-6).
+      connection-timeout: 5000
 
 # review 2026-08-27_document-ingestion-T4-round2.md Medium-E: pom.xml surefire의
 # systemPropertyVariables는 OPENROUTER_API_KEY까지 더미로 강제하는데(E5/eval 실호출 카드가 읽는
