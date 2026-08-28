@@ -122,7 +122,7 @@ class AnonymousUserServiceTest {
     void throwsQuotaExceededWhenCeilingReached() {
         // given: no cookie -- the reuse branch is skipped, so this always attempts a new issue
         AppProperties lowCeiling = TestAppPropertiesFactory.builder()
-                .session(new AppProperties.Session(5, 50))
+                .session(new AppProperties.Session(5, 50, 200))
                 .build();
         when(userRepository.countByAuthProvider("anonymous")).thenReturn(5L);
         AnonymousUserService service = new AnonymousUserService(userRepository, lowCeiling);

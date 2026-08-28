@@ -98,7 +98,7 @@ public final class TestAppPropertiesFactory {
         private AppProperties.Ingest ingest = new AppProperties.Ingest(
                 System.getProperty("java.io.tmpdir"), DataSize.ofMegabytes(20),
                 List.of("text/plain"), 2000, 500, 100);
-        private AppProperties.Session session = new AppProperties.Session(1000, 50);
+        private AppProperties.Session session = new AppProperties.Session(1000, 50, 200);
         private AppProperties.Models models = validModels();
 
         private Builder() {

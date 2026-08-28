@@ -137,8 +137,10 @@ public record AppProperties(
 
     /**
      * [Purpose] Caps the number of anonymous {@code users} rows the demo deployment may hold
-     *   (chat T4 review 2026-08-26, High-2), and the number of {@code conversations} rows any
-     *   single user may hold at once (chat T6 review 2026-08-27, Medium-2).
+     *   (chat T4 review 2026-08-26, High-2), the number of {@code conversations} rows any single
+     *   user may hold at once (chat T6 review 2026-08-27, Medium-2), and the number of 'user'
+     *   {@code messages} rows any single conversation may hold at once (chat T9 review
+     *   2026-08-27, Medium-3; user decision D-3①).
      * [Rationale] {@code maxAnonymousUsers}: mirrors the {@code Ingest.maxDocumentCount} precedent
      *   above — every unauthenticated request with no, malformed, or unknown {@code chatbot_sid}
      *   cookie makes {@code AnonymousUserService#resolveOrCreate} insert a fresh row, so a crawler
@@ -146,7 +148,7 @@ public record AppProperties(
      *   maxAnonymousUsers} only defines the ceiling; {@code AnonymousUserService} is responsible
      *   for counting {@code auth_provider='anonymous'} rows and enforcing it, and only on the
      *   "issue a brand-new row" path — cookie reuse never counts against it. 1000 is a demo-scale
-     *   ceiling (Spec R-6 §8, 1단계 로컬 데모), not a capacity estimate for the 2단계/3단계
+     *   ceiling (Spec R-6 §8, stage 1 local demo), not a capacity estimate for the stage 2/3
      *   rollout — those stages must revisit this value alongside R-6.
      *   {@code maxConversationsPerUser}: same shape of problem one level down — {@code
      *   POST /api/conversations} is unauthenticated and unconditionally inserts a row per call, so
@@ -156,10 +158,23 @@ public record AppProperties(
      *   conversations and enforcing it. 50 is a demo-scale placeholder, not a number backed by
      *   observed usage — like {@code Search.scoreThreshold} above, the eval-usage-dashboard Spec's
      *   D7 pass is expected to revisit it.
+     *   {@code maxMessagesPerConversation}: same shape of problem another level down, and the
+     *   first of the three tied to a real per-call cost — T9 connects {@code
+     *   POST /api/conversations/{id}/messages} to an actual paid OpenRouter call, so a single
+     *   {@code chatbot_sid} cookie replayed against the same conversation id triggers one billed
+     *   request per call, unbounded by either ceiling above (a single conversation can absorb
+     *   unlimited messages while its owner stays under both quotas). {@code ConversationService}
+     *   is responsible for counting a conversation's {@code role='user'} rows and enforcing it,
+     *   before {@code ChatService} makes the LLM call. 200 is a demo-scale placeholder — ten times
+     *   the fixed 20-turn {@code ChatMemory} window §7 OQ-7 sets for T10, generous headroom above
+     *   what the feature itself needs for one conversation — not a number backed by observed
+     *   usage; like the two ceilings above, the eval-usage-dashboard Spec's D7 pass is expected to
+     *   revisit it.
      */
     public record Session(
             @DefaultValue("1000") int maxAnonymousUsers,
-            @DefaultValue("50") int maxConversationsPerUser
+            @DefaultValue("50") int maxConversationsPerUser,
+            @DefaultValue("200") int maxMessagesPerConversation
     ) {}
 
     /**

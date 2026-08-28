@@ -39,15 +39,29 @@ import java.util.UUID;
  *   library (project rule: library additions need card/Spec justification), and a future
  *   card (T9/T11/hybrid-rag) that needs structured access can still add a converter without
  *   changing this column's DB type.
- * [Caution] Per Tech Review A-4, {@code ChatService} is the *only* writer of this table — no
- *   {@code ChatMemory} integration writes here. This entity is intentionally immutable after
- *   construction (no setters): the 'user' row and the 'assistant' row for one turn are two
- *   separate INSERTs (A-4's call order ①user row → ②history read → ③stream → ④assistant row),
- *   never an update of the same row, so no mutation API is needed.
+ * [Caution] Per Tech Review A-4, {@code ChatService} is the *only originator* of writes to this
+ *   table — no {@code ChatMemory} integration writes here. As of chat T9 rework (2026-08-27,
+ *   maintainability Medium-1), the literal {@code save()} call is issued by {@code
+ *   ConversationService#persistUserTurn}/{@code #persistAssistantTurn} on {@code ChatService}'s
+ *   behalf, purely so the insert (and the {@code conversations.title}/{@code updated_at} bump
+ *   alongside it) runs inside a {@code @Transactional} method on a *different* Spring bean — the
+ *   self-invocation pitfall documented on {@code ConversationRepository}'s own bulk {@code
+ *   @Modifying} queries. Only {@code ChatService} ever constructs a {@link Message} row or decides
+ *   its content/timing; {@code ConversationService} never does so on its own initiative. This
+ *   entity is intentionally immutable after construction (no setters): the 'user' row and the
+ *   'assistant' row for one turn are two separate INSERTs (A-4's call order ①user row → ②history
+ *   read → ③stream → ④assistant row), never an update of the same row, so no mutation API is
+ *   needed.
  */
 @Entity
 @Table(name = "messages")
 public class Message {
+
+    /** [Purpose] {@code messages.role} value for the caller's turn (chat Spec §5 A-4). */
+    public static final String ROLE_USER = "user";
+
+    /** [Purpose] {@code messages.role} value for the LLM's turn (chat Spec §5 A-4). */
+    public static final String ROLE_ASSISTANT = "assistant";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

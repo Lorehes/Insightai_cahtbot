@@ -17,6 +17,7 @@ import java.util.UUID;
  * [Caution] Do not throw this for the soft-deleted-conversation case — the repository count this
  *   exception is based on already excludes {@code deleted_at IS NOT NULL} rows, so deleting a
  *   conversation (T8's scope) frees up quota.
+ * [AC] chat:AC-43
  */
 public class ConversationQuotaExceededException extends RuntimeException {
 

@@ -14,7 +14,7 @@ import org.springframework.context.annotation.Bean;
  * per-test discipline. Spring AI's {@code ChatClientAutoConfiguration} still needs exactly
  * one {@code ChatModel} bean to build its {@code ChatClient.Builder} -- without this
  * {@code @TestConfiguration}, excluding the real autoconfiguration alone would make any
- * {@code @SpringBootTest} that scans {@code ChatController} (or anything else depending on
+ * {@code @SpringBootTest} that scans {@code ChatService} (or anything else depending on
  * {@code ChatClient.Builder}) fail to start.
  * [Caution] One {@link StubChatModel} instance is shared by every test method in a given
  * cached Spring context (singleton scope) -- see that class's [Caution] on {@code reset()}.

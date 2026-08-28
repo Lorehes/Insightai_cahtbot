@@ -19,7 +19,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * {@code FlywayMigrationInitializer} auto-migrates during context refresh, since a
  * {@code @BeforeEach}-based guard runs too late) and the stub {@code ChatModel} (chat:AC-35 --
  * this class exercises the real production wiring otherwise, including
- * {@code ChatController}, so without the stub it would need a real OpenRouter key and would
+ * {@code ChatService}, so without the stub it would need a real OpenRouter key and would
  * make a real call the moment anything invoked {@code ChatClient}) both apply automatically.
  * Card T2 replaced this class's previous hand-rolled static {@code @BeforeAll} guard call with
  * that inherited behavior -- see {@link IntegrationTestBase} and

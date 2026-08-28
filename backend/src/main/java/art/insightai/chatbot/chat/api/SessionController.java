@@ -16,7 +16,7 @@ import java.util.UUID;
  *   verbatim — the same value already readable from the (non-Secure, non-HttpOnly-hidden-by-body)
  *   cookie — because AC-9/AC-10 require the body to expose that identifier; this is an accepted
  *   design trade-off, not an oversight. The trade-off traces to Tech Review A-2's decision and is
- *   bounded by Spec §8 R-6 (uuid-guessing risk, accepted for the 1단계 로컬 데모 stage only) —
+ *   bounded by Spec §8 R-6 (uuid-guessing risk, accepted for the stage 1 local demo only) —
  *   it is a design decision recorded in the Spec, not a security review sign-off (no review
  *   report covers A-2; see chat T4 review 2026-08-26, security Medium-2).
  */
