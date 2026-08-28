@@ -29,14 +29,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 /**
  * [Purpose] End-to-end coverage of {@code POST /api/admin/documents} (document-ingestion Spec
  *   Tech Review T5) through the real servlet filter chain against a real database and a real
- *   filesystem write: the success response shape and its immediate DB/vector-store state
- *   (document-ingestion:AC-1), the id-derived storage path (document-ingestion:AC-4), and both
+ *   filesystem write: the success response shape (document-ingestion:AC-1), the id-derived storage
+ *   path (document-ingestion:AC-4), and both
  *   rejection branches leaving zero trace in either {@code documents} or the upload directory
  *   (document-ingestion:AC-2 MIME, document-ingestion:AC-3 application-level size). The
  *   container-level half of AC-3 ({@code MaxUploadSizeExceededException}) is deliberately NOT
@@ -74,6 +73,16 @@ import java.util.UUID;
  *   {@code detail} string (round 3 Low-2), and {@link #truncatesOverlongMimeTypeInResponseBody()}
  *   now asserts the truncated value is a genuine prefix of the original, not just short enough
  *   (round 3 Low-3).
+ *   <p>
+ *   <b>T8 moved this class's response-time DB/vector-store assertions out</b> (review 2026-08-28
+ *   T8 Medium-3, option (a)). They now live in {@code DocumentUploadAsyncHandoffIntegrationTest},
+ *   which holds both {@code ingestExecutor} workers on a latch barrier while it makes them -- see
+ *   {@link #uploadsAllowedFileReturns202PendingAndStoresOriginalUnderIdDerivedPath()} for why they
+ *   stopped being facts here. For the same reason {@link #cleanUpInsertedRows()} now waits for the
+ *   background ingestion to reach a terminal state before deleting anything: this class's uploads
+ *   really do start a worker now, and deleting the row and the source file out from under it left
+ *   that worker's chunks orphaned in the shared {@code vector_store_bgem3} (neither search axis
+ *   joins {@code documents}, so orphans stay retrievable).
  */
 @AutoConfigureMockMvc
 class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
@@ -102,6 +111,15 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
     private static final String INVALID_DOCUMENT_FILENAME_CLIENT_MESSAGE =
             "uploaded file must have a name no longer than the server allows";
 
+    /**
+     * How long {@link #cleanUpInsertedRows()} waits for a background ingestion to reach a terminal
+     * state before cleaning up behind it. Generous on purpose: this is a correctness guard against
+     * orphaned chunks, not a performance assertion.
+     */
+    private static final long TERMINAL_WAIT_MILLIS = 60_000L;
+
+    private static final long POLL_INTERVAL_MILLIS = 50L;
+
     @TempDir
     static Path uploadDir;
 
@@ -121,9 +139,23 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
 
     private final List<UUID> insertedDocumentIds = new ArrayList<>();
 
+    /**
+     * [Purpose] Removes the row, chunks and upload file of every document this class created --
+     *   after waiting for the background ingestion T8 now starts for each of them to finish.
+     * [Rationale] Without the wait this cleanup races the {@code ingestExecutor} worker: deleting
+     *   the row and the source file mid-ingestion makes the worker fail on a file JUnit's
+     *   {@code @TempDir} may already have removed, and any chunk it writes after
+     *   {@code deleteByDocumentId} has run stays in the shared {@code vector_store_bgem3} with no
+     *   {@code documents} row to explain it (review 2026-08-28 T8 Medium-3, "late-worker hazard").
+     * [Caution] The wait is best-effort: on timeout this proceeds with the delete rather than
+     *   failing, because throwing from {@code @AfterEach} would replace the real test verdict with
+     *   a cleanup one. A timeout here means ingestion took longer than
+     *   {@link #TERMINAL_WAIT_MILLIS}, which is itself worth investigating.
+     */
     @AfterEach
     void cleanUpInsertedRows() {
         for (UUID documentId : insertedDocumentIds) {
+            awaitTerminalStatus(documentId);
             chunkRepository.deleteByDocumentId(documentId);
             jdbcTemplate.update("DELETE FROM documents WHERE id = ?", documentId);
             deleteOrThrow(uploadedFilePath(documentId));
@@ -132,9 +164,9 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("[document-ingestion:AC-1][document-ingestion:AC-4] 허용 MIME 파일 업로드는 202+PENDING을 반환하고 "
-            + "응답 시점까지 색인 흔적이 없으며, 원본은 사용자 파일명이 아니라 document.id 경로에만 저장된다")
-    void uploadsAllowedFileReturns202PendingWithNoIndexingTraceAndIdDerivedPath() throws Exception {
+    @DisplayName("[document-ingestion:AC-1][document-ingestion:AC-4] 허용 MIME 파일 업로드는 202+PENDING을 반환하고, "
+            + "원본은 사용자 파일명이 아니라 document.id 경로에만 저장된다")
+    void uploadsAllowedFileReturns202PendingAndStoresOriginalUnderIdDerivedPath() throws Exception {
         // given: an original filename crafted to escape upload-dir if it were ever used verbatim
         // for the storage path (DD-2/AC-4) -- this is the same shape DocumentUploadServiceTest's
         // unit-level AC-4 case uses, replayed here through the real filesystem write.
@@ -156,24 +188,18 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
         UUID documentId = UUID.fromString(idString);
         insertedDocumentIds.add(documentId);
 
-        // then: the persisted row is PENDING with no completion fields set yet -- this and the
-        // vector-store check below are what this test can actually observe about AC-1's response-
-        // time state claim. What this does NOT prove, and what the evidence ledger's AC-1 cell no
-        // longer overstates (review 2026-08-28 Medium-1): a mock-verified "the parsing collaborator
-        // was never invoked" check as Spec §6's Unit table calls for -- there is currently no
-        // DocumentParser dependency on DocumentUploadService to mock at all, so that specific claim
-        // rests on the class's structure (see DocumentUploadServiceTest's own [Rationale]), not on
-        // an interaction verification here. Nor is there yet anything to race against: no listener
-        // for DocumentUploadedEvent exists anywhere in the codebase as of this card (T8's async
-        // pipeline is not implemented yet) -- this exact assertion must be re-run once T8 wires up
-        // its @TransactionalEventListener before it can be trusted as evidence against *that* race
-        // (see DocumentUploadedEvent's own [Caution]/NR-3).
-        Map<String, Object> row = jdbcTemplate.queryForMap(
-                "SELECT status, indexed_at, chunk_count FROM documents WHERE id = ?", documentId);
-        assertThat(row.get("status")).isEqualTo("PENDING");
-        assertThat(row.get("indexed_at")).isNull();
-        assertThat(row.get("chunk_count")).isNull();
-        assertThat(chunkRepository.countByDocumentId(documentId)).isZero();
+        // then: the persisted row's response-time state (status still PENDING, indexed_at and
+        // chunk_count still null, zero chunks) is deliberately NOT asserted here any more -- review
+        // 2026-08-28 T8 Medium-3. Until T8 no listener for DocumentUploadedEvent existed anywhere
+        // in the codebase, so those four assertions were a property of the code. T8 wired an
+        // AFTER_COMMIT listener that submits the ingestion to ingestExecutor, and from that point
+        // the same four assertions only said "this thread read the row before a worker updated it".
+        // Making them facts again requires holding both ingest workers on a barrier, and that
+        // barrier is owned by exactly one class rather than duplicated: see
+        // DocumentUploadAsyncHandoffIntegrationTest, which now carries them together with the
+        // mock-verified "no parsing collaborator was invoked" check that AC-1's own wording and
+        // Spec §6's Unit table ask for. What remains this class's own is the response contract
+        // above and the filesystem contract below -- the background worker only reads that file.
 
         // then: the original bytes landed under upload-dir/{document.id}, never under a path
         // derived from the malicious original filename (AC-4)
@@ -308,6 +334,33 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
         // then
         assertThat(DocumentRowCounter.countDocuments(jdbcTemplate)).isEqualTo(documentsBefore);
         assertThat(countUploadDirEntries()).isEqualTo(uploadDirEntriesBefore);
+    }
+
+    /**
+     * [Purpose] Polls {@code documents.status} until the background ingestion of {@code documentId}
+     *   reaches INDEXED or FAILED, or the wait times out.
+     * [Rationale] Plain {@link JdbcTemplate} polling rather than a new waiting dependency, matching
+     *   {@code DocumentUploadAsyncHandoffIntegrationTest} and this card's no-new-dependency
+     *   constraint. Tolerates the row being gone already (an earlier cleanup, or a caller that
+     *   never created one).
+     */
+    private void awaitTerminalStatus(UUID documentId) {
+        long deadline = System.currentTimeMillis() + TERMINAL_WAIT_MILLIS;
+        while (System.currentTimeMillis() < deadline) {
+            List<String> statuses = jdbcTemplate.queryForList(
+                    "SELECT status FROM documents WHERE id = ?", String.class, documentId);
+            if (statuses.isEmpty()
+                    || "INDEXED".equals(statuses.get(0))
+                    || "FAILED".equals(statuses.get(0))) {
+                return;
+            }
+            try {
+                Thread.sleep(POLL_INTERVAL_MILLIS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
     }
 
     private long countUploadDirEntries() throws IOException {
