@@ -4,7 +4,8 @@ import java.util.List;
 
 /**
  * [Purpose] The full set of items loaded from an eval-set YAML file, with the found/not-found
- *   split that AC-1 checks (20 total = 15 found + 5 not-found in the real production file).
+ *   split that AC-1 checks (25 total = 15 found + 10 not-found in the real production file,
+ *   per the 2026-08-26 expansion from the original 20 = 15 + 5).
  */
 public record EvalSet(List<EvalCase> cases) {
 
