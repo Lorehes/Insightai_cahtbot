@@ -5,8 +5,10 @@ import art.insightai.chatbot.chat.domain.Conversation;
 import art.insightai.chatbot.chat.domain.Message;
 import art.insightai.chatbot.chat.service.ChatService;
 import art.insightai.chatbot.chat.service.ConversationService;
+import art.insightai.chatbot.common.session.AnonymousSessionFilter;
 import art.insightai.chatbot.common.session.SessionContext;
 
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -124,35 +126,75 @@ public class ConversationController {
      * [Rationale] {@code produces = MediaType.TEXT_EVENT_STREAM_VALUE} together with a {@code
      *   Flux<ChatChunk>} return type (a POJO, never a raw {@code String}) is what makes
      *   chat:AC-24 true: Spring MVC serializes each emitted {@link ChatChunk} as its own JSON
-     *   {@code data:} line instead of writing raw text (CLAUDE.md fact #6).
+     *   {@code data:} line instead of writing raw text (CLAUDE.md fact #6). The {@code
+     *   HttpServletResponse} parameter exists solely to fix chat:AC-36: this method calls {@code
+     *   response.setHeader("Cache-Control", "no-store, no-transform")} synchronously, before
+     *   returning the {@code Flux} (i.e. before Spring's {@code ReactiveTypeHandler} starts
+     *   writing the body) — ordinary synchronous request handling, not a race with the stream.
+     *   {@code no-transform} is not a caching hint here; it is the exact signal Next.js's bundled
+     *   {@code compression} middleware checks in {@code shouldTransform} (source-verified against
+     *   {@code frontend/node_modules/next/dist/compiled/compression/index.js}) before gzip-wrapping
+     *   a response. gzip must fill a compression block before flushing bytes, which is what turned
+     *   this endpoint's genuinely-incremental per-token SSE emission into one lump that arrived
+     *   6.8 seconds late in a real browser — a real browser always sends {@code Accept-Encoding},
+     *   {@code curl} does not unless told to, so an earlier {@code curl}-only check of this same
+     *   endpoint reported healthy incremental delivery and missed the defect entirely (see {@code
+     *   docs/review/2026-08-28_chat-browser-verification.md}). {@code Content-Encoding: identity}
+     *   was considered and rejected: the same {@code compression} source treats a response with no
+     *   {@code Content-Encoding} header yet as already {@code "identity"} and compresses it anyway
+     *   — only {@code no-transform} actually suppresses compression.
      * [Caution] {@code userId} is read from {@link SessionContext} here, in the synchronous
      *   method body, and never inside a {@code Flux} operator (Tech Review A-8) — do not move
-     *   this read into a {@code .map()}/{@code .flatMap()}. T7 review round 1 Low-1 (security):
-     *   this endpoint had no per-user send-frequency or daily cap once it started making a real
-     *   OpenRouter call. T9 rework 2026-08-27 (security Medium-3, user decision D-3①) closes part
-     *   of that gap: {@link ChatService#streamReply} now rejects once a conversation holds {@code
+     *   this read into a {@code .map()}/{@code .flatMap()}. {@link AnonymousSessionFilter}
+     *   already stamps {@code Cache-Control: no-store} on every {@code /api/*} response via
+     *   {@code addHeader}, ahead of this controller in the filter chain (Tech Review A-9) — this
+     *   method uses {@code setHeader}, not {@code addHeader}, specifically to *replace* that
+     *   single value rather than append a second {@code Cache-Control} header (two values most
+     *   HTTP clients handle unpredictably). Dropping the {@code no-store} half while keeping only
+     *   {@code no-transform} would silently reopen T4 review round 2's caching gap for a response
+     *   that also carries this session's cookie side effects — always keep both directives
+     *   together. This override is deliberately scoped to this one endpoint rather than changed
+     *   in the filter for every {@code /api/*} response, so {@link #list}/{@link #messages} keep
+     *   the compression benefit; revisit that trade-off at Spec §8 R-6's roadmap stage ①
+     *   (internal LAN release, nginx enters the picture) if compression starts to matter in
+     *   practice. Do not verify this header with a plain {@code curl} call — {@code curl} omits
+     *   {@code Accept-Encoding} by default, so the response looks identical with or without this
+     *   fix; a discriminating check must send {@code -H "Accept-Encoding: gzip, deflate, br"}
+     *   explicitly. T7 review round 1 Low-1 (security): this endpoint had no per-user
+     *   send-frequency or daily cap once it started making a real OpenRouter call. T9 rework
+     *   2026-08-27 (security Medium-3, user decision D-3①) closes part of that gap: {@link
+     *   ChatService#streamReply} now rejects once a conversation holds {@code
      *   app.session.max-messages-per-conversation} 'user' rows (chat:AC-45) — a per-conversation
      *   ceiling, not a time-windowed rate limit, so a caller can still create a new conversation
      *   (up to {@code max-conversations-per-user}) and resume sending at full speed immediately.
      *   That combination is not even bounded at {@code max-conversations-per-user ×
-     *   max-messages-per-conversation} (50 × 200 = 10,000): deleting a conversation frees its slot
-     *   in {@code max-conversations-per-user} right away, because {@code
+     *   max-messages-per-conversation} (50 × 200 = 10,000): deleting a conversation frees its
+     *   slot in {@code max-conversations-per-user} right away, because {@code
      *   ConversationService#createConversation}'s count excludes soft-deleted rows while
      *   chat:AC-16 still requires the deleted conversation and its messages to survive on disk —
-     *   the same fact {@link ConversationQuotaExceededException}'s own [Caution] already documents
-     *   for conversation creation. A caller can therefore delete-and-recreate conversations
-     *   indefinitely, so this endpoint's true ceiling on message volume from one session is
-     *   unbounded, not the finite 10,000 the two static caps alone would suggest (chat T9 review
-     *   round 2, security Low-1; user decision 2026-08-27: leave the caps as they are for now).
-     *   {@link #delete} and {@link #updateRagEnabled} still have no cap of any kind. Revisit all of
-     *   the above — the uncapped {@code delete}/{@code updateRagEnabled} endpoints and this
-     *   quota-reset gap alike — together at Spec §8 R-6's roadmap stage ① (internal LAN release) —
-     *   that stage's own text already calls for a rate-limit re-review at that point; not
-     *   re-litigated by this card.
-     * [AC] chat:AC-17, chat:AC-18, chat:AC-22, chat:AC-24
+     *   the same fact {@link ConversationQuotaExceededException}'s own [Caution] already
+     *   documents for conversation creation. A caller can therefore delete-and-recreate
+     *   conversations indefinitely, so this endpoint's true ceiling on message volume from one
+     *   session is unbounded, not the finite 10,000 the two static caps alone would suggest (chat
+     *   T9 review round 2, security Low-1; user decision 2026-08-27: leave the caps as they are
+     *   for now). The per-call cost side of this gap is tracked separately in {@link
+     *   ChatService#streamReply}'s {@code [Caution]} note (T10 review, 2026-08-28, security
+     *   Medium-1 — roughly 211x per call from multi-turn history); that finding postdates this
+     *   endpoint's 2026-08-27 acceptance above, and the two factors multiply. {@link #delete} and
+     *   {@link #updateRagEnabled} still have no cap of any kind. Revisit all of the above — the
+     *   uncapped {@code delete}/{@code updateRagEnabled} endpoints and this quota-reset gap alike
+     *   — together at Spec §8 R-6's roadmap stage ① (internal LAN release) — that stage's own
+     *   text already calls for a rate-limit re-review at that point; not re-litigated by this
+     *   card.
+     * [AC] chat:AC-17, chat:AC-18, chat:AC-22, chat:AC-24, chat:AC-36
      */
     @PostMapping(value = "/{id}/messages", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<ChatChunk> sendMessage(@PathVariable UUID id, @Valid @RequestBody SendMessageRequest request) {
+    public Flux<ChatChunk> sendMessage(
+            @PathVariable UUID id, @Valid @RequestBody SendMessageRequest request, HttpServletResponse response) {
+        // chat:AC-36 fix: replace AnonymousSessionFilter's plain "no-store" with "no-store,
+        // no-transform" so Next.js's compression middleware does not gzip-buffer this SSE
+        // response -- see this method's [Rationale]/[Caution] above for why.
+        response.setHeader("Cache-Control", "no-store, no-transform");
         UUID userId = sessionContext.currentUserId();
         Conversation conversation = conversationService.prepareMessageSend(id, userId, request.model());
         return chatService.streamReply(conversation, request.model(), request.message());

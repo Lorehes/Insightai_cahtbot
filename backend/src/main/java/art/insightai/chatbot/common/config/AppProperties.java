@@ -26,7 +26,8 @@ public record AppProperties(
         @DefaultValue Rerank rerank,
         @DefaultValue Ingest ingest,
         @DefaultValue Session session,
-        @DefaultValue Models models
+        @DefaultValue Models models,
+        @DefaultValue Chat chat
 ) {
 
     /** [Purpose] Authentication strategy. NONE for the demo, WORKS (NAVER WORKS SSO) in Phase 2. */
@@ -244,5 +245,53 @@ public record AppProperties(
 
         /** [Purpose] One selectable model: OpenRouter id plus a human-readable label. */
         public record ModelEntry(String id, String displayName) {}
+    }
+
+    /**
+     * [Purpose] Multi-turn {@code ChatMemory} configuration (chat Spec §7 OQ-7, Tech Review A-5,
+     *   T10).
+     * [Rationale] Nested under {@code chat.memory.*} — not a flat {@code app.chat-memory-max-
+     *   messages} key — because {@code app.chat.memory.max-messages} is the exact property path
+     *   Tech Review A-5 specifies. Only one setting exists today ({@link Memory#maxMessages}), but
+     *   the extra {@code Chat} level leaves room for future {@code app.chat.*} settings (e.g. a
+     *   system prompt) without a breaking rename, mirroring how {@link Models} already leaves
+     *   {@link Models.ModelEntry} nested rather than flattening its two fields into {@code
+     *   AppProperties} directly.
+     */
+    public record Chat(
+            @DefaultValue Memory memory
+    ) {
+        /**
+         * [Purpose] How many of the most-recent {@code messages} rows (user+assistant combined)
+         *   {@code MessageChatMemoryRepository} feeds into the LLM prompt for multi-turn context.
+         * [Rationale] {@code maxMessages} defaults to 40 = 20 turns x 2 rows/turn (one 'user' +
+         *   one 'assistant' row per turn) — the user-approved OQ-7 answer ("최근 20턴 고정"), not a
+         *   value this record derives on its own. The x2 pairing is structural (every request
+         *   writes exactly one {@code role='user'} row and one {@code role='assistant'} row per
+         *   chat:AC-29), so a future change to the turn count only ever edits this one number.
+         * [Caution] The compact constructor rejects {@code maxMessages < 1} at application
+         *   startup — fail-fast, following the same {@link Models}/{@link Ingest} precedent, so a
+         *   bad {@code app.chat.memory.max-messages} value in application.yaml never reaches
+         *   {@code MessageChatMemoryRepository#findByConversationId} at request time. Without this
+         *   guard, {@code MessageChatMemoryRepository#findByConversationId}'s {@code
+         *   Math.max(0, rows.size() - maxMessages)} silently misbehaves at both edges T10 review
+         *   2026-08-28 (correctness Medium-2) found: {@code 0} makes that expression equal {@code
+         *   rows.size()}, so {@code rows.subList(rows.size(), rows.size())} returns an empty list —
+         *   and because {@link art.insightai.chatbot.chat.service.ChatService#streamReply} no
+         *   longer sends a separate {@code .user(userMessage)} call (T10), the current turn's own
+         *   question is then never sent to the LLM at all; any negative value makes the expression
+         *   exceed {@code rows.size()}, and {@code List#subList} throws {@code
+         *   IndexOutOfBoundsException} on every {@code POST .../messages} call.
+         */
+        public record Memory(
+                @DefaultValue("40") int maxMessages
+        ) {
+            public Memory {
+                if (maxMessages < 1) {
+                    throw new IllegalStateException(
+                            "app.chat.memory.max-messages must be at least 1, got: " + maxMessages);
+                }
+            }
+        }
     }
 }

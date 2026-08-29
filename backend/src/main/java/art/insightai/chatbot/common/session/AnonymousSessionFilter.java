@@ -40,7 +40,12 @@ import java.util.UUID;
  *   being visible to a client; the WARN log in {@code AnonymousUserService} still carries that
  *   detail for operators. Every response also carries {@code Cache-Control: no-store} (T4 review
  *   round 2, Low, carried over twice) so neither the browser nor an intermediary caches a
- *   session-bearing response. {@code GET /api/models} (chat Spec §5 A-11) is a static,
+ *   session-bearing response. {@code art.insightai.chatbot.chat.api.ConversationController#sendMessage}
+ *   replaces this single value with {@code "no-store, no-transform"} on its own SSE response only
+ *   (chat:AC-36 fix, 2026-08-28) — this filter is unaware of that override and keeps stamping the
+ *   plain default below on every other {@code /api/*} response; see that method's
+ *   [Rationale]/[Caution] for why a streaming response needs the extra directive. {@code GET
+ *   /api/models} (chat Spec §5 A-11) is a static,
  *   session-free catalog with no {@link SessionContext} reader, so a cookie-less request to that
  *   path skips {@code resolveOrCreate} entirely and falls straight through the chain (T5 review
  *   round 1, Medium-1) — without this, every cookie-less hit (including a drive-by no-cors GET

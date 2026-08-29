@@ -32,6 +32,9 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
@@ -224,6 +227,68 @@ import org.springframework.test.web.servlet.MvcResult;
  *   text covers {@code ragEnabled}'s default/explicit-value contract specifically (AC-13 only
  *   covers ownership, AC-23 only {@code model}); follows the same untagged-contract-test
  *   precedent as {@code updatesRagEnabledForOwnConversationAndReturnsUpdatedFields} above.
+ * [T10 additions, dev-qa-tester 2026-08-28] Two new tests close the gap dev-backend-engineer's own
+ *   T10 handoff explicitly flagged as unverified by its own unit-level coverage: {@code
+ *   secondMessageInSameConversationPromptIncludesFirstTurnFromARealDbRoundTrip} (chat:AC-30) sends
+ *   two real {@code POST .../messages} requests for the same conversation through this class's
+ *   normal MockMvc/StubChatModel/live-ParadeDB stack -- unlike {@code
+ *   ChatServiceTest#secondMessageInSameConversationIncludesFirstTurnInThePrompt}, {@code
+ *   MessageChatMemoryRepository} is never mocked here, so the second call's history genuinely comes
+ *   from a real {@code SELECT} against {@code messages} the first call's {@code
+ *   performMessageSendAndAwaitStream} already committed -- and additionally asserts the second
+ *   turn's own question appears in the outgoing {@link Prompt} exactly once, locking in {@code
+ *   ChatService.streamReply}'s removal of a separate {@code .user(userMessage)} call (see that
+ *   method's own [Rationale]) against a silent reintroduction that would double-send this turn's
+ *   question to the LLM. {@code
+ *   noChatMemoryHistoryTableExistsAfterMigrationStartupAndOneRealConversation} (chat:AC-31) is a
+ *   pure regression lock, not a "currently broken" probe -- chat Spec Tech Review R-5's own
+ *   correction already confirms {@code pom.xml} carries no {@code
+ *   spring-ai-starter-model-chat-memory-repository-jdbc} dependency, so {@code
+ *   JdbcChatMemoryRepository}'s autoconfiguration never triggers today; this test exists so that if
+ *   that dependency is ever reintroduced, the resulting extra table is caught immediately instead of
+ *   silently diverging from {@code messages} (the audited single source of truth, Tech Review A-4).
+ *   It queries {@code information_schema.tables} for a case-insensitive substring match rather than
+ *   one hardcoded exact table name, and first proves the same query mechanism actually finds this
+ *   project's own real {@code messages}/{@code conversations} tables -- so a "0 matches" result for
+ *   the chat-memory patterns cannot be misread as "the query itself sees nothing" (this project
+ *   independently hit that exact false-negative shape three times in one day: a {@code grep} that
+ *   silently skipped 27 lines, a {@code curl} call that omitted a header and hid a real defect, and
+ *   a wrong element selector reporting a false failure).
+ * [T11 additions, dev-backend-engineer 2026-08-29] Two new tests cover this card's token/cost
+ *   wire contract end-to-end: {@link #streamedUsageTokensMatchPersistedAssistantRow} (chat:AC-32)
+ *   and {@link #streamedUsageCostSurvivesSerializationAndDbRoundTripExactly} (chat:AC-33), both
+ *   driven through the real filter chain + live ParadeDB + shared {@link StubChatModel}, unlike
+ *   {@code ChatServiceTest}'s mocked-fluent-chain unit coverage of the same two ACs.
+ * [T11 rework additions, dev-qa-tester 2026-08-29, 1R Block review/2026-08-29_chat-T11.md High-1/
+ *   L1] {@link #streamedUsageCostSurvivesSerializationAndDbRoundTripExactly}'s scripted cost was
+ *   {@code BigDecimal("2.25E-6")} — an exact boundary value where {@link
+ *   java.math.BigDecimal#toString()} and {@code toPlainString()} produce byte-identical output
+ *   (unscaled 225, scale 8, adjusted exponent exactly -6, the cutoff {@code toString()}'s own
+ *   contract uses to switch to scientific notation), so the two byte-level assertions this test
+ *   makes on the raw SSE body passed regardless of whether {@code
+ *   spring.jackson.write.write-bigdecimal-as-plain} was configured, misspelled, or deleted
+ *   entirely — directly reproduced by deleting that property from {@code application.yaml} and
+ *   re-running this test alone: still PASS (see this card's dev-log entry for the exact command
+ *   and restoration confirmation). Replaced the scripted cost with {@code BigDecimal("4.8E-7")} —
+ *   a value the S1 spike's own real, paid-call measurement produced (state.md:547,
+ *   {@code upstream_inference_completions_cost=4.8E-7}), whose adjusted exponent is -7, one past
+ *   the cutoff, so its default {@code toString()} genuinely does emit {@code "4.8E-7"} — and
+ *   updated the byte assertions to {@code contains("0.00000048")}/
+ *   {@code doesNotContainIgnoringCase("e-7")}; re-ran the same deletion experiment against this
+ *   new value and confirmed the test now genuinely fails without the property, then restored
+ *   {@code application.yaml} (not this class's file to own) and re-confirmed PASS. The earlier
+ *   {@code "2.25E-6"} boundary case was not kept alongside it — a second scripted cost would only
+ *   duplicate the same "response == DB" assertions this test already makes with a value proven to
+ *   carry no discriminative power for the one property this test exists to lock, so removing it
+ *   loses no coverage this class did not already have elsewhere (unit-level exponential-notation
+ *   handling is separately covered by {@code ChatServiceTest#lastChunkUsageCostMatchesPersistedAssistantRowExactly},
+ *   which never touches the SSE byte layer and keeps its own {@code "2.25E-6"} literal). Also
+ *   fixed L1 in the same test: the prior {@code usage.get("cost").toString()} read the JSON value
+ *   through {@link com.jayway.jsonpath.JsonPath}'s {@code Double}-backed parsing (see {@link
+ *   #parseSseChunks}), which can only round-trip through a {@code double} and so structurally
+ *   cannot detect a precision loss introduced at the JSON-encoding step — replaced with {@link
+ *   #extractLastRawCostToken}, which slices the {@code "cost":} token directly out of the raw SSE
+ *   response bytes before any JSON-to-Java-object parsing occurs.
  */
 @AutoConfigureMockMvc
 @TestPropertySource(properties = "app.session.max-anonymous-users=100000")
@@ -962,6 +1027,31 @@ class ConversationControllerIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
+    @DisplayName("[chat:AC-36] POST .../messages 응답의 Cache-Control이 no-store와 no-transform을 "
+            + "동시에 실어보내고, 두 개의 별도 Cache-Control 헤더로 쪼개지지 않는다")
+    void sendMessageResponseCacheControlCarriesBothNoStoreAndNoTransform() throws Exception {
+        // given: AnonymousSessionFilter stamps a plain "no-store" on every /api/* response
+        //   (addHeader) before this controller ever runs -- this test proves the controller's own
+        //   setHeader call replaces that single value rather than appending a second header
+        Session sessionA = establishSession();
+        Conversation conversation = saveConversation(sessionA.userId(), "upstage/solar-pro4", false);
+        stubChatModel.reset();
+        stubChatModel.enqueueTokens(List.of("안녕", "하세요"), "stop", new StubChatModel.Usage(3, 2, BigDecimal.ZERO));
+
+        // when
+        MvcResult result = performMessageSendAndAwaitStream(sessionA, conversation.getId(), "안녕");
+
+        // then: exactly one Cache-Control header, carrying both directives -- this is the
+        //   necessary condition for chat:AC-36 (a header actually leaves the server telling an
+        //   intermediary/browser proxy not to buffer-compress this response); it cannot by itself
+        //   prove the browser-observed defect is fixed (see this class's own dev-log entry for
+        //   that limit -- MockMvc never gzips a response, so it cannot reproduce the compression
+        //   defect this header suppresses)
+        assertThat(result.getResponse().getHeaders("Cache-Control")).hasSize(1);
+        assertThat(result.getResponse().getHeader("Cache-Control")).isEqualTo("no-store, no-transform");
+    }
+
+    @Test
     @DisplayName("[chat:AC-25] 선행 공백을 가진 토큰(오늘/ 금요일/ 점검)을 스트리밍하면 delta 를 이어붙인 "
             + "문자열이 원문과 정확히 일치한다 (공백 유실 0)")
     void streamedDeltasConcatenateToExactOriginalTextWithLeadingSpacesPreserved() throws Exception {
@@ -1113,6 +1203,219 @@ class ConversationControllerIntegrationTest extends IntegrationTestBase {
         Map<String, Object> conversationRowAfter = fetchConversationRow(conversation.getId());
         assertThat(conversationRowAfter.get("title")).isEqualTo("점검 일정 알려줘");
         assertThat(fetchUpdatedAt(conversation.getId())).isAfter(updatedAtBefore);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    @DisplayName("[chat:AC-32] 응답의 usage.prompt_tokens/completion_tokens 값이 assistant "
+            + "messages 행의 prompt_tokens/completion_tokens 와 각각 같다")
+    void streamedUsageTokensMatchPersistedAssistantRow() throws Exception {
+        // given
+        Session sessionA = establishSession();
+        Conversation conversation = saveConversation(sessionA.userId(), "upstage/solar-pro4", false);
+        stubChatModel.reset();
+        stubChatModel.enqueueTokens(List.of("답변"), "stop", new StubChatModel.Usage(59, 4, new BigDecimal("2.25E-6")));
+
+        // when
+        MvcResult result = performMessageSendAndAwaitStream(sessionA, conversation.getId(), "질문");
+
+        // then: the SSE response's terminal chunk carries the scripted token counts
+        List<Map<String, Object>> chunks = parseSseChunks(readBodyAsUtf8(result));
+        Map<String, Object> usage = (Map<String, Object>) chunks.get(chunks.size() - 1).get("usage");
+        assertThat(usage).isNotNull();
+        assertThat(((Number) usage.get("prompt_tokens")).intValue()).isEqualTo(59);
+        assertThat(((Number) usage.get("completion_tokens")).intValue()).isEqualTo(4);
+
+        // then: the persisted assistant row carries the identical token counts
+        List<Map<String, Object>> messageRows = fetchMessageRows(conversation.getId());
+        Map<String, Object> assistantRow = messageRows.get(1);
+        assertThat(((Number) assistantRow.get("prompt_tokens")).intValue()).isEqualTo(59);
+        assertThat(((Number) assistantRow.get("completion_tokens")).intValue()).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("[chat:AC-33] 응답의 usage.cost 값이 assistant messages 행의 cost_usd 와 부동소수 "
+            + "반올림 없이 십진 일치하고, 지수 표기 입력이 SSE 직렬화·numeric 컬럼 저장·재조회를 거쳐도 "
+            + "보존된다")
+    void streamedUsageCostSurvivesSerializationAndDbRoundTripExactly() throws Exception {
+        // given: BigDecimal("4.8E-7") is the S1 spike's real, paid-call-measured OpenRouter cost
+        //   value itself (state.md:547, upstream_inference_completions_cost=4.8E-7) -- unlike the
+        //   earlier "2.25E-6" literal this test used before the 2026-08-29 1R rework (review
+        //   High-1), this value's adjusted exponent is -7, one past the -6 cutoff BigDecimal#
+        //   toString()'s own contract uses to switch to scientific notation, so its default
+        //   toString() genuinely renders as "4.8E-7" -- the byte-level assertions below only have
+        //   discriminative power (i.e. can actually fail if write-bigdecimal-as-plain regresses)
+        //   because of that; "2.25E-6" sits exactly on the boundary where toString() and
+        //   toPlainString() already agree, so it could not have caught that regression (this
+        //   class's own [T11 rework additions] Javadoc has the reproduction)
+        Session sessionA = establishSession();
+        Conversation conversation = saveConversation(sessionA.userId(), "upstage/solar-pro4", false);
+        stubChatModel.reset();
+        BigDecimal scriptedCost = new BigDecimal("4.8E-7");
+        stubChatModel.enqueueTokens(List.of("답변"), "stop", new StubChatModel.Usage(59, 4, scriptedCost));
+
+        // when
+        MvcResult result = performMessageSendAndAwaitStream(sessionA, conversation.getId(), "질문");
+
+        // then: the raw SSE bytes never carry scientific notation -- application.yaml's
+        //   spring.jackson.write.write-bigdecimal-as-plain (T11) forces plain-decimal
+        //   serialization; without it this BigDecimal would round-trip through Jackson as
+        //   "4.8E-7" instead
+        String body = readBodyAsUtf8(result);
+        assertThat(body).doesNotContainIgnoringCase("e-7");
+        assertThat(body).contains("0.00000048");
+
+        // then: the JSON usage.cost value is numerically the exact scripted BigDecimal -- read
+        //   directly off the raw SSE bytes (2026-08-29 1R rework, review L1), not through
+        //   parseSseChunks()'s JsonPath-backed Map (JsonPath parses JSON numbers as Double, so
+        //   funneling that back through BigDecimal(String) cannot detect a precision loss that
+        //   already happened at the JSON-encoding step)
+        BigDecimal responseCost = extractLastRawCostToken(body);
+        assertThat(responseCost).isEqualByComparingTo(scriptedCost);
+
+        // then: the persisted assistant row's cost_usd, read back from PostgreSQL's numeric
+        //   column, is the exact same value as the response -- proving the exponential-notation
+        //   input survives both the SSE JSON round trip and the DB round trip (chat:AC-33's
+        //   "응답 값 = DB 행의 값")
+        List<Map<String, Object>> messageRows = fetchMessageRows(conversation.getId());
+        Map<String, Object> assistantRow = messageRows.get(1);
+        BigDecimal persistedCost = (BigDecimal) assistantRow.get("cost_usd");
+        assertThat(persistedCost).isEqualByComparingTo(scriptedCost);
+        assertThat(persistedCost).isEqualByComparingTo(responseCost);
+    }
+
+    @Test
+    @DisplayName("[chat:AC-30] 같은 conversationId 로 2번째 메시지를 보내면 두 번째 호출의 프롬프트에 "
+            + "1번째 턴의 user·assistant 메시지가 순서대로 포함되고 2번째 턴의 user 메시지는 정확히 1번만 "
+            + "실린다 (T10 -- ChatServiceTest#secondMessageInSameConversationIncludesFirstTurnInThePrompt "
+            + "와 달리 MessageChatMemoryRepository 를 모킹하지 않는다. 이 테스트의 존재 이유가 실제 DB "
+            + "왕복이므로, 두 번째 호출에서 MessageChatMemoryRepository.findByConversationId 가 실제로 "
+            + "PostgreSQL 에서 1번째 턴의 두 행을 읽어오는지가 판별 대상이다)")
+    void secondMessageInSameConversationPromptIncludesFirstTurnFromARealDbRoundTrip() throws Exception {
+        // given: one conversation, two turns' worth of scripted stub responses queued up front --
+        //   StubChatModel's script queue is FIFO (that class's own Javadoc), so the first script
+        //   below answers the first POST and the second answers the second POST
+        Session sessionA = establishSession();
+        Conversation conversation = saveConversation(sessionA.userId(), "upstage/solar-pro4", false);
+        stubChatModel.reset();
+        stubChatModel.enqueueTokens(List.of("1번째 답"), "stop", new StubChatModel.Usage(2, 2, BigDecimal.ZERO));
+        stubChatModel.enqueueTokens(List.of("2번째 답"), "stop", new StubChatModel.Usage(2, 2, BigDecimal.ZERO));
+
+        // when: first turn -- performMessageSendAndAwaitStream blocks until the whole SSE stream
+        //   (including the terminal chunk) has been written, which is what lets ChatService's
+        //   doOnComplete hook persist the 'assistant' row before this method returns (see that
+        //   method's own Javadoc; the AC-29 test above relies on the same guarantee). If the stream
+        //   were only partially consumed, the second call below would read an incomplete history
+        //   from the DB and this test would fail for the wrong reason
+        performMessageSendAndAwaitStream(sessionA, conversation.getId(), "1번째 질문");
+        assertThat(fetchMessageCount(conversation.getId())).isEqualTo(2L);
+
+        // when: second turn, same conversationId -- MessageChatMemoryRepository (T10, the real
+        //   bean, never mocked here) reads messages/conversations directly from the same live
+        //   PostgreSQL connection this test's own JdbcTemplate assertions use
+        performMessageSendAndAwaitStream(sessionA, conversation.getId(), "2번째 질문");
+
+        // then: exactly two prompts reached the LLM, in call order -- the second one is this
+        //   test's real subject
+        List<Prompt> prompts = stubChatModel.capturedPrompts();
+        assertThat(prompts).hasSize(2);
+
+        // then: the FIRST turn's prompt is not empty either -- correctness Medium-3 (T10 review
+        //   round 1, 2026-08-28): before this addition, nothing anywhere asserted prompts.get(0),
+        //   so a MessageChatMemoryRepository.findByConversationId defect that returns an empty
+        //   list for a conversation's very first turn (e.g. an off-by-one guard shaped like
+        //   "if (rows.size() <= 1) return List.of();") would leave the LLM's first-ever prompt
+        //   empty on every single conversation -- production's most common path, since every
+        //   conversation starts with exactly one turn -- while this same test's second-turn
+        //   assertions below still passed (the 2nd call always sees >=2 rows), and StubChatModel
+        //   replies from a fixed script regardless of prompt content, so no other test in this
+        //   class would have caught it either. Deliberately left untagged (not [chat:AC-30]):
+        //   AC-30's own text only requires the SECOND message's prompt to include the first turn
+        //   -- it says nothing about the first turn's own prompt, so tagging this assertion would
+        //   make the evidence ledger claim more than the AC text actually requires.
+        List<org.springframework.ai.chat.messages.Message> firstPromptMessages = prompts.get(0).getInstructions();
+        assertThat(firstPromptMessages).hasSize(1);
+        assertThat(firstPromptMessages)
+                .extracting(org.springframework.ai.chat.messages.Message::getText)
+                .containsExactly("1번째 질문");
+
+        List<org.springframework.ai.chat.messages.Message> secondPromptMessages = prompts.get(1).getInstructions();
+
+        // then: exactly 3 messages -- 1st turn's user, 1st turn's assistant, 2nd turn's user, in
+        //   that order. ChatService's own [Rationale] documents exactly why: the 'user' row ①
+        //   INSERT happens before ② the history read, so chatMemory.get() already ends with this
+        //   turn's own question, and .messages(history) alone (no separate .user(...) call)
+        //   supplies it
+        assertThat(secondPromptMessages).hasSize(3);
+        assertThat(secondPromptMessages.get(0)).isInstanceOf(UserMessage.class);
+        assertThat(secondPromptMessages.get(1)).isInstanceOf(AssistantMessage.class);
+        assertThat(secondPromptMessages.get(2)).isInstanceOf(UserMessage.class);
+        assertThat(secondPromptMessages)
+                .extracting(org.springframework.ai.chat.messages.Message::getText)
+                .containsExactly("1번째 질문", "1번째 답", "2번째 질문");
+
+        // then: the 2nd turn's own question appears exactly once -- a regression lock against
+        //   ChatService reintroducing a separate .user(userMessage) call alongside
+        //   .messages(history), which would send this turn's question to the LLM twice (see
+        //   ChatService.streamReply's own [Rationale]: DefaultChatClientUtils.toChatClientRequest
+        //   appends .messages(...) then .user(...) as two independent, additive steps)
+        long secondTurnUserOccurrences = secondPromptMessages.stream()
+                .filter(message -> message instanceof UserMessage && "2번째 질문".equals(message.getText()))
+                .count();
+        assertThat(secondTurnUserOccurrences).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("[chat:AC-31] 마이그레이션·기동·대화 1건 수행 후에도 messages 외의 대화 이력 테이블(예: "
+            + "SPRING_AI_CHAT_MEMORY류 이름)이 존재하지 않는다 (T10 -- chat Spec Tech Review R-5 정정: "
+            + "spring-ai-starter-model-chat-memory-repository-jdbc 가 pom.xml에 없어 "
+            + "JdbcChatMemoryRepository 자동 구성의 트리거 자체가 없으므로, 이 테스트는 '지금 깨졌는지'가 "
+            + "아니라 '앞으로 그 의존성이 다시 추가돼도 곧바로 잡히도록' 고정하는 회귀 테스트다)")
+    void noChatMemoryHistoryTableExistsAfterMigrationStartupAndOneRealConversation() throws Exception {
+        // given: perform one real conversation end-to-end -- migration+startup already happened
+        //   by the time this @SpringBootTest context is up (IntegrationTestBase), so this call
+        //   supplies the AC text's remaining "대화 1건 수행" precondition
+        Session sessionA = establishSession();
+        Conversation conversation = saveConversation(sessionA.userId(), "upstage/solar-pro4", false);
+        stubChatModel.reset();
+        stubChatModel.enqueueTokens(List.of("답변"), "stop", new StubChatModel.Usage(1, 1, BigDecimal.ZERO));
+        performMessageSendAndAwaitStream(sessionA, conversation.getId(), "질문");
+        assertThat(fetchMessageCount(conversation.getId())).isEqualTo(2L);
+
+        // then: the query mechanism itself can find real tables -- proven FIRST, against this
+        //   project's own known tables, so a "0" result below cannot be misread as "the query saw
+        //   nothing" instead of "the table genuinely does not exist" (this project hit exactly
+        //   that false-negative shape three times in one day per this card's own instructions: a
+        //   grep that silently skipped 27 lines, a curl call that omitted a header and hid a real
+        //   defect, and a wrong element selector reporting a false failure)
+        assertThat(countTablesMatching("messages")).isEqualTo(1L);
+        assertThat(countTablesMatching("conversations")).isEqualTo(1L);
+
+        // then: the '%' wildcard itself actually matches a substring, not just an exact literal --
+        //   correctness Low-2 (T10 review round 1, 2026-08-28): the two controls immediately above
+        //   never exercise a '%' character, so on their own they would still pass even if
+        //   countTablesMatching's LIKE pattern were silently broken in a way that degrades every
+        //   '%...%' pattern to zero matches (e.g. a driver/JDBC escaping bug, or the '%' getting
+        //   stripped before reaching the query) -- the "0 results" assertions below would then be
+        //   a false negative (query sees nothing) misread as a true one (table genuinely absent),
+        //   the exact failure shape this test's own comment above already guards against for plain
+        //   literals. "essage" is a substring of "messages" (an already-confirmed real table) but
+        //   is not the whole table name, so this only passes if '%' partial matching genuinely works
+        assertThat(countTablesMatching("%essage%")).isEqualTo(1L);
+
+        // then: no table whose name contains "chat_memory" exists, case-insensitively -- Spring
+        //   AI's own default JdbcChatMemoryRepository schema names its table SPRING_AI_CHAT_MEMORY
+        //   (this AC's own text cites that exact example), but this check intentionally does not
+        //   hardcode that one literal spelling: a substring LIKE match, lower-cased on both sides,
+        //   still catches it (and close variants) without depending on Spring AI never changing
+        //   casing/prefix conventions across a future version bump
+        assertThat(countTablesMatching("%chat_memory%")).isEqualTo(0L);
+
+        // then: a second, independent pattern -- Spring AI's autoconfigure modules ship every
+        //   vendor table (chat memory, vector store) under this same "spring_ai" prefix -- so this
+        //   regression lock does not depend solely on the literal substring "chat_memory"
+        //   surviving verbatim in some future Spring AI release
+        assertThat(countTablesMatching("spring_ai%")).isEqualTo(0L);
     }
 
     @Test
@@ -1341,6 +1644,23 @@ class ConversationControllerIntegrationTest extends IntegrationTestBase {
     }
 
     /**
+     * [Purpose] Counts {@code information_schema.tables} rows in the {@code public} schema whose
+     *   (lower-cased) name matches {@code likePatternLowercase} -- chat:AC-31 (T10).
+     * [Rationale] Case-insensitive via {@code lower()} on both sides so a vendor-created table
+     *   using any casing convention (e.g. Spring AI's own {@code SPRING_AI_CHAT_MEMORY}) is still
+     *   caught regardless of how PostgreSQL happened to fold its identifier. Passing a pattern with
+     *   no {@code %}/{@code _} wildcard characters (e.g. {@code "messages"}) degrades to an exact,
+     *   case-insensitive match -- the same method doubles as this test's positive control for the
+     *   real tables it already knows exist.
+     */
+    private Long countTablesMatching(String likePatternLowercase) {
+        return jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM information_schema.tables "
+                        + "WHERE table_schema = 'public' AND lower(table_name) LIKE lower(?)",
+                Long.class, likePatternLowercase);
+    }
+
+    /**
      * [Purpose] Reads every column of a single {@code conversations} row as a {@link Map} (T8
      *   review round 1 correctness Low-3(a)) -- used by the chat:AC-17 test above for a full
      *   before/after snapshot instead of naming individual columns, so a mutation to any column
@@ -1471,6 +1791,34 @@ class ConversationControllerIntegrationTest extends IntegrationTestBase {
             chunks.add(JsonPath.read(value, "$"));
         }
         return chunks;
+    }
+
+    /**
+     * [Purpose] Reads the last {@code "cost":<number>} token out of the raw SSE response bytes
+     *   and builds a {@link BigDecimal} directly from that substring (2026-08-29 review L1).
+     * [Rationale] {@link #parseSseChunks} hands JSON numbers to {@link JsonPath#read}, which
+     *   backs them with {@code Double} — funneling that back through {@code
+     *   new BigDecimal(usage.get("cost").toString())} can only ever compare two values that have
+     *   both already been rounded to {@code double} precision, so it structurally cannot detect a
+     *   precision loss introduced at the JSON-encoding step itself (the exact thing {@code
+     *   spring.jackson.write.write-bigdecimal-as-plain} governs). Slicing the literal straight out
+     *   of the wire bytes, before any JSON-to-Java-object parsing occurs, avoids that intermediate
+     *   {@code double} entirely.
+     * [Caution] Assumes exactly one {@code "cost":<number>} token appears in {@code body} — true
+     *   for every test built on {@link StubChatModel}'s "usage only on the terminal chunk" shape,
+     *   since non-terminal chunks serialize their {@code null} {@code usage} field as
+     *   {@code "usage":null} (no nested {@code "cost"} key at all). Takes the last match rather
+     *   than requiring exactly one so a future test scripting multiple assistant turns in one body
+     *   still resolves to the most recent value, matching this test's own intent.
+     */
+    private static BigDecimal extractLastRawCostToken(String body) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\"cost\":(-?[0-9.eE+-]+)").matcher(body);
+        String lastMatch = null;
+        while (matcher.find()) {
+            lastMatch = matcher.group(1);
+        }
+        assertThat(lastMatch).as("no \"cost\":<number> token found in SSE body").isNotNull();
+        return new BigDecimal(lastMatch);
     }
 
     private static String concatenateDeltas(List<Map<String, Object>> chunks) {

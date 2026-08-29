@@ -4,6 +4,14 @@ import art.insightai.chatbot.chat.domain.ChatChunk;
 import art.insightai.chatbot.chat.domain.Conversation;
 import art.insightai.chatbot.chat.domain.Message;
 import art.insightai.chatbot.chat.domain.MessageQuotaExceededException;
+import art.insightai.chatbot.chat.repository.MessageChatMemoryRepository;
+import art.insightai.chatbot.common.config.AppProperties;
+import art.insightai.chatbot.common.config.TestAppPropertiesFactory;
+import art.insightai.chatbot.support.StubChatModel;
+
+import com.fasterxml.jackson.databind.node.DoubleNode;
+import com.openai.core.JsonValue;
+import com.openai.models.completions.CompletionUsage;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -15,21 +23,28 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.openai.OpenAiChatOptions;
 
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -116,6 +131,55 @@ import static org.mockito.Mockito.when;
  *   {@code backend/src/main/java/**} was never touched to do it — T9 round-2's file boundary keeps
  *   this class's own production counterpart off limits while {@code dev-backend-engineer} edits
  *   Javadoc there in parallel).
+ * [T10, dev-backend-engineer 2026-08-28] {@link ChatService}'s constructor gained two parameters —
+ *   {@link MessageChatMemoryRepository} and {@link AppProperties} — to build the {@code ChatMemory}
+ *   chat:AC-30 needs; {@link #setUp} passes a {@code @Mock MessageChatMemoryRepository} and {@link
+ *   TestAppPropertiesFactory#valid()} (never a hand-built {@link AppProperties}, per project rule —
+ *   see that factory's own Javadoc). None of the pre-existing tests below care about chat history,
+ *   so {@code chatMemoryRepository.findByConversationId(...)} is stubbed once, leniently, to the
+ *   same empty list Mockito would already return by default for an unstubbed {@code
+ *   List}-returning method — made explicit rather than relied upon. The fluent-chain stub for
+ *   {@code requestSpec.user(...)} was replaced with one for {@code requestSpec.messages(...)},
+ *   since {@code ChatService} no longer calls {@code .user(...)} at all (see that class's own
+ *   [Rationale] on why). One new test, {@link
+ *   #secondMessageInSameConversationIncludesFirstTurnInThePrompt}, deliberately does not reuse this
+ *   class's mocked-fluent-chain style: it builds a real {@link ChatClient} around {@link
+ *   StubChatModel} so its assertion reads an actual {@code Prompt} Spring AI itself constructed,
+ *   not merely that {@code ChatService} invoked some mock method — {@code StubChatModel}'s own
+ *   {@code capturedPrompts()} Javadoc already names this exact use case.
+ * [T11 additions, dev-backend-engineer 2026-08-29] Two tests exercise the token/cost recording
+ *   this card adds: {@link #lastChunkUsageTokensMatchPersistedAssistantRow} (chat:AC-32) and
+ *   {@link #lastChunkUsageCostMatchesPersistedAssistantRowExactly} (chat:AC-33), both against a
+ *   new local helper {@link #scriptedResponsesWithUsage} (mirrors {@link #scriptedResponses}, but
+ *   the finish chunk's {@code usage} carries a real {@link CompletionUsage} nativeUsage — the
+ *   concrete SDK type {@code ChatService#extractCost} casts to in production). A third, untagged
+ *   test ({@link #missingCostAdditionalPropertyYieldsNullCostInsteadOfThrowing}) locks the
+ *   fallback path ({@code cost} additional property absent → {@code null}, not an exception) that
+ *   does not itself assert either AC's "response == DB" equality claim.
+ * [T11 rework additions, dev-qa-tester 2026-08-29, 1R Block review/2026-08-29_chat-T11.md] Two
+ *   more tests close review gaps neither of the above catches: {@link
+ *   #sendsOpenRouterUsageIncludeExtraBodyFlagOnEveryRequest} (Medium-1) asserts the {@code
+ *   requestSpec.options(...)} argument this class already mocks actually carries {@code
+ *   extraBody(usage.include=true)} — without it, {@code cost} silently becomes {@code null} in
+ *   production while {@link #lastChunkUsageCostMatchesPersistedAssistantRowExactly} above stays
+ *   green (it scripts {@code cost} directly on the stub response and never touches the outgoing
+ *   request), so AC-33's "response == DB" was vacuously true for a response that would never
+ *   occur for real. Deliberately untagged: it verifies a precondition of AC-33's mechanism, not
+ *   the "response == DB" equality AC-33's text itself states — the same reasoning this class
+ *   already applies to {@link #missingCostAdditionalPropertyYieldsNullCostInsteadOfThrowing}.
+ *   {@link #zeroFilledUsageOnANonTerminalChunkDoesNotLeakOntoTheWireOrOverwriteTheFinalUsage}
+ *   (Medium-2) reproduces the real wire shape S1's spike found (state.md, 2026-08-25): every
+ *   non-terminal delta chunk carries a *present but zeroed* {@code usage}
+ *   (prompt=0/completion=0/total=0), not the complete absence of a {@code usage} object that
+ *   {@link #scriptedResponses}/{@link #plainResponse}'s bare {@code ChatResponse} construction
+ *   happens to also make {@code getTotalTokens() > 0} fail for — so
+ *   {@link #lastChunkUsageTokensMatchPersistedAssistantRow}'s existing "no non-terminal chunk
+ *   carries usage" loop was not actually distinguishing "no usage object" from "usage object with
+ *   all-zero fields" for {@code ChatService#toChunk}'s {@code > 0} guard. Also deliberately
+ *   untagged for the same reason: it hardens the guard against a shape neither AC's text
+ *   describes, rather than checking the "response == DB" claim itself. New local helper {@link
+ *   #scriptedResponsesWithZeroUsageDelta} mirrors {@link #scriptedResponsesWithUsage} but injects
+ *   the zeroed shape on one non-terminal chunk instead of the terminal one.
  */
 @ExtendWith(MockitoExtension.class)
 class ChatServiceTest {
@@ -138,6 +202,9 @@ class ChatServiceTest {
     @Mock
     private ConversationService conversationService;
 
+    @Mock
+    private MessageChatMemoryRepository chatMemoryRepository;
+
     private ChatService service;
 
     @BeforeEach
@@ -148,11 +215,53 @@ class ChatServiceTest {
         // strict stubs (MockitoExtension's default) these four would otherwise fail that one test
         // with UnnecessaryStubbingException even though every other test in this class does use them.
         lenient().when(chatClient.prompt()).thenReturn(requestSpec);
-        lenient().when(requestSpec.user(anyString())).thenReturn(requestSpec);
+        lenient().when(requestSpec.messages(anyList())).thenReturn(requestSpec);
         lenient().when(requestSpec.options(any())).thenReturn(requestSpec);
         lenient().when(requestSpec.stream()).thenReturn(streamResponseSpec);
+        // lenient(): every test below except secondMessageInSameConversationIncludesFirstTurnInThePrompt
+        // (chat:AC-30, which builds its own local ChatService around a real ChatClient/StubChatModel
+        // instead of this mocked fluent chain) is indifferent to chat history -- Mockito's own
+        // unstubbed-List-return default (an empty list) would already cover them, but this makes
+        // that explicit rather than relying on it silently.
+        lenient().when(chatMemoryRepository.findByConversationId(anyString())).thenReturn(List.of());
 
-        service = new ChatService(chatClientBuilder, conversationService);
+        service = new ChatService(chatClientBuilder, conversationService, chatMemoryRepository,
+                TestAppPropertiesFactory.valid());
+    }
+
+    @Test
+    @DisplayName("[chat:AC-30] 같은 대화에 2번째 메시지를 보내면 프롬프트에 1번째 턴이 포함된다")
+    void secondMessageInSameConversationIncludesFirstTurnInThePrompt() {
+        // given: a REAL ChatClient backed by StubChatModel -- not this class's mocked fluent chain
+        //   (requestSpec/streamResponseSpec) -- so capturedPrompts() reflects Spring AI's own real
+        //   message composition (DefaultChatClientUtils.toChatClientRequest, read directly in
+        //   spring-ai-client-chat-2.0.1-sources.jar), not merely "ChatService called some mock
+        //   method". chatMemoryRepository is re-stubbed here, more specifically than setUp()'s
+        //   anyString() catch-all (a later when() for the same mock wins for a matching
+        //   invocation), to return what the DB would already hold by the time streamReply() reads
+        //   history for this (2nd) call -- per Tech Review A-4's call order (insert THEN read),
+        //   that already includes this turn's own question as the last element.
+        StubChatModel stubChatModel = new StubChatModel();
+        stubChatModel.enqueueTokens(List.of("2번째 답"), "stop", new StubChatModel.Usage(1, 1, BigDecimal.ZERO));
+        when(chatMemoryRepository.findByConversationId(CONVERSATION_ID.toString())).thenReturn(List.of(
+                new UserMessage("1번째 질문"),
+                new AssistantMessage("1번째 답"),
+                new UserMessage("2번째 질문")));
+        ChatService serviceUnderTest = new ChatService(
+                ChatClient.builder(stubChatModel), conversationService, chatMemoryRepository,
+                TestAppPropertiesFactory.valid());
+        Conversation conversation = conversationStub();
+
+        // when
+        serviceUnderTest.streamReply(conversation, null, "2번째 질문").collectList().block();
+
+        // then: the one real Prompt StubChatModel received carries every message chatMemory.get()
+        //   returned, in order -- including the first turn's user+assistant content, not just this
+        //   call's own userMessage argument
+        assertThat(stubChatModel.capturedPrompts()).hasSize(1);
+        assertThat(stubChatModel.capturedPrompts().get(0).getInstructions())
+                .extracting(org.springframework.ai.chat.messages.Message::getText)
+                .containsExactly("1번째 질문", "1번째 답", "2번째 질문");
     }
 
     @Test
@@ -249,6 +358,146 @@ class ChatServiceTest {
 
         // then: the quota was checked before any of the above
         verify(conversationService).enforceMessageQuota(CONVERSATION_ID);
+    }
+
+    @Test
+    @DisplayName("[chat:AC-32] 스트림 마지막 응답의 usage 가 0이 아니면 응답 usage.prompt_tokens/"
+            + "completion_tokens 가 assistant messages 행의 prompt_tokens/completion_tokens 와 "
+            + "각각 같다")
+    void lastChunkUsageTokensMatchPersistedAssistantRow() {
+        // given: S1 spike (state.md, 2026-08-25) -- every non-terminal delta chunk in a real
+        //   stream carries a zeroed usage (prompt=0/completion=0/total=0), so only the terminal
+        //   response here is scripted with a non-zero one
+        when(streamResponseSpec.chatResponse())
+                .thenReturn(scriptedResponsesWithUsage(List.of("오늘", " 금요일", " 점검"), "stop", 59, 4, null));
+        Conversation conversation = conversationStub();
+
+        // when
+        List<ChatChunk> chunks = service.streamReply(conversation, null, "점검 일정 알려줘").collectList().block();
+
+        // then: no non-terminal chunk carries usage
+        for (int i = 0; i < chunks.size() - 1; i++) {
+            assertThat(chunks.get(i).usage()).isNull();
+        }
+
+        // then: the terminal chunk's usage carries exactly the scripted token counts
+        ChatChunk.Usage lastUsage = chunks.get(chunks.size() - 1).usage();
+        assertThat(lastUsage).isNotNull();
+        assertThat(lastUsage.promptTokens()).isEqualTo(59);
+        assertThat(lastUsage.completionTokens()).isEqualTo(4);
+
+        // then: the persisted assistant row carries the identical token counts -- read from the
+        //   same usageHolder entry as the response chunk above, not a second, independent read
+        ArgumentCaptor<Message> assistantMessageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(conversationService).persistAssistantTurn(assistantMessageCaptor.capture());
+        Message assistantRow = assistantMessageCaptor.getValue();
+        assertThat(assistantRow.getPromptTokens()).isEqualTo(lastUsage.promptTokens());
+        assertThat(assistantRow.getCompletionTokens()).isEqualTo(lastUsage.completionTokens());
+    }
+
+    @Test
+    @DisplayName("[chat:AC-33] 응답의 usage.cost 값이 assistant messages 행의 cost_usd 와 부동소수 "
+            + "반올림 없이 정확히 같다 (지수 표기 입력 포함)")
+    void lastChunkUsageCostMatchesPersistedAssistantRowExactly() {
+        // given: BigDecimal("2.25E-6") mirrors the S1 spike's real, paid-call-measured OpenRouter
+        //   cost value (state.md, 2026-08-25) -- an exponential-notation literal, per this card's
+        //   own precondition risk
+        BigDecimal scriptedCost = new BigDecimal("2.25E-6");
+        when(streamResponseSpec.chatResponse())
+                .thenReturn(scriptedResponsesWithUsage(List.of("ok"), "stop", 59, 4, scriptedCost));
+        Conversation conversation = conversationStub();
+
+        // when
+        List<ChatChunk> chunks = service.streamReply(conversation, null, "hi").collectList().block();
+
+        // then: the response chunk's usage.cost survived the wire-format-shaped extraction intact
+        ChatChunk.Usage lastUsage = chunks.get(chunks.size() - 1).usage();
+        assertThat(lastUsage).isNotNull();
+        assertThat(lastUsage.cost()).isEqualByComparingTo(scriptedCost);
+
+        // then: the persisted assistant row's cost_usd is the exact same value as the response --
+        //   both come from the one BigDecimal ChatService#extractCost produced (that method's own
+        //   [Rationale] explains why this holds by construction, not coincidence), so this is not
+        //   merely two independent extractions that happen to agree
+        ArgumentCaptor<Message> assistantMessageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(conversationService).persistAssistantTurn(assistantMessageCaptor.capture());
+        Message assistantRow = assistantMessageCaptor.getValue();
+        assertThat(assistantRow.getCostUsd()).isEqualByComparingTo(lastUsage.cost());
+    }
+
+    @Test
+    @DisplayName("nativeUsage 에 cost 애트리뷰트가 없으면 usage.cost 는 null 이지 예외를 던지지 않는다 "
+            + "(OpenRouter extraBody 의 usage-include 플래그가 응답에 반영되지 않은 경우 대응 -- AC "
+            + "문장을 직접 검증하지 않으므로 태그 없음)")
+    void missingCostAdditionalPropertyYieldsNullCostInsteadOfThrowing() {
+        // given: usage present (non-zero token counts) but no cost additional property
+        when(streamResponseSpec.chatResponse())
+                .thenReturn(scriptedResponsesWithUsage(List.of("ok"), "stop", 3, 2, null));
+        Conversation conversation = conversationStub();
+
+        // when
+        List<ChatChunk> chunks = service.streamReply(conversation, null, "hi").collectList().block();
+
+        // then
+        ChatChunk.Usage lastUsage = chunks.get(chunks.size() - 1).usage();
+        assertThat(lastUsage).isNotNull();
+        assertThat(lastUsage.cost()).isNull();
+    }
+
+    @Test
+    @DisplayName("(무태그 -- AC-33 원문의 \"응답 == DB\" 등치 자체가 아니라 그 등치가 공허해지지 않기 위한 "
+            + "전제를 검증. 1R Block review Medium-1) 매 요청 LLM 옵션에 OpenRouter 의 usage.include=true "
+            + "extraBody 확장이 실린다 -- 이게 빠지면 실제 운용에서 cost 는 항상 null 이 되고, 응답·DB 양쪽이 "
+            + "null 이면 AC-33 은 공허하게 참이 되어 이 회귀를 어느 태그된 테스트도 잡지 못한다")
+    void sendsOpenRouterUsageIncludeExtraBodyFlagOnEveryRequest() {
+        // given
+        when(streamResponseSpec.chatResponse())
+                .thenReturn(scriptedResponsesWithUsage(List.of("ok"), "stop", 3, 2, BigDecimal.ONE));
+        Conversation conversation = conversationStub();
+        ArgumentCaptor<OpenAiChatOptions.Builder> optionsCaptor =
+                ArgumentCaptor.forClass(OpenAiChatOptions.Builder.class);
+
+        // when
+        service.streamReply(conversation, null, "hi").collectList().block();
+
+        // then: ChatClientRequestSpec#options(B) takes a ChatOptions.Builder<?>, not a built
+        //   ChatOptions (ChatService.java:265-266 never calls .build() itself -- ChatClient does),
+        //   so the argument captured here is the builder ChatService constructed; building it
+        //   surfaces the same OpenAiChatOptions the real fluent chain would send, carrying the
+        //   OpenRouter usage-include extraBody entry
+        verify(requestSpec).options(optionsCaptor.capture());
+        OpenAiChatOptions options = optionsCaptor.getValue().build();
+        assertThat(options.getExtraBody()).containsEntry("usage", Map.of("include", true));
+    }
+
+    @Test
+    @DisplayName("(무태그 -- AC-32 원문의 \"응답 == DB\" 등치 자체가 아니라 그 등치를 만드는 usageHolder 배선을 "
+            + "실제 와이어 형상에서 지키는지 검증. 1R Block review Medium-2) 비종단 델타 청크에 0으로 채워진 "
+            + "usage(prompt=0/completion=0/total=0)가 실려도 그 청크의 usage 는 null 로 나가고, 종단 청크의 "
+            + "0이 아닌 usage 를 덮어쓰지 않는다")
+    void zeroFilledUsageOnANonTerminalChunkDoesNotLeakOntoTheWireOrOverwriteTheFinalUsage() {
+        // given: S1 spike (state.md, 2026-08-25) found real non-terminal delta chunks carry a
+        //   *present but zeroed* usage object, not the complete absence scriptedResponsesWithUsage
+        //   (and scriptedResponses) construct via bare ChatResponse(List.of(...)) -- both happen
+        //   to make getTotalTokens() > 0 fail too, so this scenario was never actually exercised
+        when(streamResponseSpec.chatResponse())
+                .thenReturn(scriptedResponsesWithZeroUsageDelta(
+                        List.of("오늘", " 금요일", " 점검"), 1, "stop", 59, 4, null));
+        Conversation conversation = conversationStub();
+
+        // when
+        List<ChatChunk> chunks = service.streamReply(conversation, null, "점검 일정 알려줘").collectList().block();
+
+        // then: the mid-stream chunk carrying the zero-filled usage still surfaces usage == null
+        //   on the wire -- the > 0 guard correctly treats "present but zeroed" the same as "absent"
+        assertThat(chunks.get(1).usage()).isNull();
+
+        // then: the terminal chunk's usage is the scripted non-zero values, not zeroed out or
+        //   otherwise disturbed by the mid-stream zero-usage chunk
+        ChatChunk.Usage lastUsage = chunks.get(chunks.size() - 1).usage();
+        assertThat(lastUsage).isNotNull();
+        assertThat(lastUsage.promptTokens()).isEqualTo(59);
+        assertThat(lastUsage.completionTokens()).isEqualTo(4);
     }
 
     @Test
@@ -527,5 +776,98 @@ class ChatServiceTest {
 
     private static ChatResponse plainResponse(String token) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(token))));
+    }
+
+    /**
+     * [Purpose] Same shape as {@link #scriptedResponses}, but the finish chunk carries a non-zero
+     *   {@code usage} (T11, chat:AC-32/chat:AC-33) whose {@code nativeUsage} is a real {@link
+     *   CompletionUsage} — the concrete type {@code ChatService#extractCost} casts to in
+     *   production, per the S1 spike.
+     * [Rationale] {@code cost}, when non-{@code null}, is wrapped via {@link
+     *   JsonValue#fromJsonNode} over a {@link DoubleNode} rather than {@link
+     *   JsonValue#from(Object)} directly on the {@link BigDecimal} — this reproduces the one lossy
+     *   step the real OpenAI SDK's own Jackson tree performs before the wire value ever reaches
+     *   application code (that class never enables {@code USE_BIG_DECIMAL_FOR_FLOATS}; see {@code
+     *   support.StubChatModel#nativeUsageOf}'s own Javadoc for the same reasoning, duplicated here
+     *   since this class does not depend on that test-support class for its mocked-fluent-chain
+     *   tests).
+     */
+    private static Flux<ChatResponse> scriptedResponsesWithUsage(List<String> tokens, String finishReason,
+            int promptTokens, int completionTokens, BigDecimal cost) {
+        List<ChatResponse> chunks = new ArrayList<>();
+        for (String token : tokens) {
+            chunks.add(plainResponse(token));
+        }
+        Generation finishGeneration = new Generation(
+                new AssistantMessage(""),
+                ChatGenerationMetadata.builder().finishReason(finishReason).build());
+        CompletionUsage.Builder nativeUsageBuilder = CompletionUsage.builder()
+                .promptTokens(promptTokens)
+                .completionTokens(completionTokens)
+                .totalTokens(promptTokens + completionTokens);
+        if (cost != null) {
+            nativeUsageBuilder.putAdditionalProperty("cost",
+                    JsonValue.fromJsonNode(DoubleNode.valueOf(cost.doubleValue())));
+        }
+        ChatResponseMetadata metadata = ChatResponseMetadata.builder()
+                .usage(new DefaultUsage(promptTokens, completionTokens, null, nativeUsageBuilder.build()))
+                .build();
+        chunks.add(new ChatResponse(List.of(finishGeneration), metadata));
+        return Flux.fromIterable(chunks);
+    }
+
+    /**
+     * [Purpose] Same shape as {@link #scriptedResponsesWithUsage}, except the token at {@code
+     *   zeroUsageTokenIndex} additionally carries a zeroed {@link ChatResponseMetadata} {@code
+     *   usage} (prompt=0/completion=0/total=0, with a matching zero-filled {@link CompletionUsage}
+     *   nativeUsage) instead of no metadata at all (2026-08-29 review Medium-2).
+     * [Rationale] chat T11's S1 spike (state.md, 2026-08-25) found every non-terminal delta chunk
+     *   a real OpenRouter stream sends carries usage metadata that is present but zeroed, not
+     *   absent -- {@link #plainResponse}'s bare {@code ChatResponse} construction happens to also
+     *   yield {@code getTotalTokens() == 0} (falls back to {@link
+     *   org.springframework.ai.chat.metadata.EmptyUsage}), so no test built only on {@link
+     *   #scriptedResponsesWithUsage} actually distinguishes "no usage object" from "usage object
+     *   with all-zero fields" for {@code ChatService#toChunk}'s {@code > 0} guard. This method
+     *   constructs the zeroed shape explicitly so a test can.
+     * [Caution] {@code zeroUsageTokenIndex} must index into {@code tokens}, never the synthetic
+     *   finish chunk this method appends -- the finish chunk always carries the real, non-zero
+     *   {@code usage} built from {@code promptTokens}/{@code completionTokens}/{@code cost}.
+     */
+    private static Flux<ChatResponse> scriptedResponsesWithZeroUsageDelta(List<String> tokens,
+            int zeroUsageTokenIndex, String finishReason, int promptTokens, int completionTokens, BigDecimal cost) {
+        List<ChatResponse> chunks = new ArrayList<>();
+        for (int i = 0; i < tokens.size(); i++) {
+            if (i == zeroUsageTokenIndex) {
+                CompletionUsage zeroNativeUsage = CompletionUsage.builder()
+                        .promptTokens(0)
+                        .completionTokens(0)
+                        .totalTokens(0)
+                        .build();
+                ChatResponseMetadata zeroMetadata = ChatResponseMetadata.builder()
+                        .usage(new DefaultUsage(0, 0, null, zeroNativeUsage))
+                        .build();
+                chunks.add(new ChatResponse(
+                        List.of(new Generation(new AssistantMessage(tokens.get(i)))), zeroMetadata));
+            }
+            else {
+                chunks.add(plainResponse(tokens.get(i)));
+            }
+        }
+        Generation finishGeneration = new Generation(
+                new AssistantMessage(""),
+                ChatGenerationMetadata.builder().finishReason(finishReason).build());
+        CompletionUsage.Builder nativeUsageBuilder = CompletionUsage.builder()
+                .promptTokens(promptTokens)
+                .completionTokens(completionTokens)
+                .totalTokens(promptTokens + completionTokens);
+        if (cost != null) {
+            nativeUsageBuilder.putAdditionalProperty("cost",
+                    JsonValue.fromJsonNode(DoubleNode.valueOf(cost.doubleValue())));
+        }
+        ChatResponseMetadata metadata = ChatResponseMetadata.builder()
+                .usage(new DefaultUsage(promptTokens, completionTokens, null, nativeUsageBuilder.build()))
+                .build();
+        chunks.add(new ChatResponse(List.of(finishGeneration), metadata));
+        return Flux.fromIterable(chunks);
     }
 }

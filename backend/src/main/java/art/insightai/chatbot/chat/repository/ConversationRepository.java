@@ -48,6 +48,22 @@ public interface ConversationRepository extends JpaRepository<Conversation, UUID
     long countByUserIdAndDeletedAtIsNull(UUID userId);
 
     /**
+     * [Purpose] Lists every non-soft-deleted conversation's id, across all users — chat Spec
+     *   Tech Review A-4's {@code MessageChatMemoryRepository#findConversationIds} table entry
+     *   ("conversations 에서 deleted_at IS NULL 인 id 목록"), T10.
+     * [Rationale] No existing finder returns ids across every user — {@link
+     *   #findByIdAndUserIdAndDeletedAtIsNull} and {@link
+     *   #findByUserIdAndDeletedAtIsNullOrderByUpdatedAtDesc} above are both scoped to one {@code
+     *   userId}, but {@code ChatMemoryRepository#findConversationIds} has no per-user notion at
+     *   all — so a dedicated query is needed. A projection {@code @Query} (selects just {@code
+     *   c.id}, not full {@link Conversation} entities) rather than a derived {@code
+     *   findByDeletedAtIsNull()} returning {@code List<Conversation>}, since the only caller
+     *   ({@code MessageChatMemoryRepository}) needs ids alone.
+     */
+    @Query("select c.id from Conversation c where c.deletedAt is null")
+    List<UUID> findIdsByDeletedAtIsNull();
+
+    /**
      * [Purpose] Bumps {@code updated_at} to {@code updatedAt} for conversation {@code id} (chat
      *   Spec Tech Review A-12: bumped in application code on every {@code messages} INSERT, no DB
      *   trigger).

@@ -3,6 +3,8 @@ package art.insightai.chatbot.support;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.openai.models.completions.CompletionUsage;
+
 import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -39,8 +41,42 @@ class StubChatModelTest {
         assertThat(finishChunk.getResult().getMetadata().getFinishReason()).isEqualTo("stop");
         assertThat(finishChunk.getMetadata().getUsage().getPromptTokens()).isEqualTo(7);
         assertThat(finishChunk.getMetadata().getUsage().getCompletionTokens()).isEqualTo(4);
-        assertThat(finishChunk.getMetadata().getUsage().getNativeUsage())
-                .isEqualTo(new StubChatModel.Usage(7, 4, new BigDecimal("0.0012")));
+
+        // then: nativeUsage is the concrete SDK type chat T11's ChatService actually casts to
+        //   (StubChatModel's own [Rationale] on nativeUsageOf explains why this must be a real
+        //   CompletionUsage, not this test's own scripted StubChatModel.Usage record) -- and its
+        //   "cost" additional property carries the scripted amount.
+        Object nativeUsage = finishChunk.getMetadata().getUsage().getNativeUsage();
+        assertThat(nativeUsage).isInstanceOf(CompletionUsage.class);
+        CompletionUsage completionUsage = (CompletionUsage) nativeUsage;
+        assertThat(completionUsage.promptTokens()).isEqualTo(7L);
+        assertThat(completionUsage.completionTokens()).isEqualTo(4L);
+        assertThat(completionUsage._additionalProperties().get("cost").asNumber())
+                .contains(0.0012);
+    }
+
+    @Test
+    void zeroUsageDeltaChunkCarriesZeroFilledUsageAndDoesNotAffectTheFinalChunksUsage() {
+        // given: chat T11's S1 spike found real non-terminal delta chunks carry usage metadata
+        //   that is present but zeroed, not entirely absent (2026-08-29 review Medium-2)
+        StubChatModel stub = new StubChatModel();
+        stub.enqueueTokensWithZeroUsageDelta(
+                List.of("오늘", " 금요일", " 점검"), 1, "stop",
+                new StubChatModel.Usage(59, 4, null));
+
+        // when
+        List<ChatResponse> chunks = stub.stream(new Prompt("아무 질문")).collectList().block();
+
+        // then: the mid-stream chunk at index 1 carries a present-but-zeroed usage object, not
+        //   EmptyUsage's implicit default that enqueueTokens()'s bare chunks fall back to
+        assertThat(chunks.get(1).getMetadata().getUsage().getTotalTokens()).isZero();
+        assertThat(chunks.get(1).getMetadata().getUsage().getNativeUsage()).isInstanceOf(CompletionUsage.class);
+
+        // then: the terminal chunk's usage is untouched by the zeroed mid-stream chunk
+        ChatResponse finishChunk = chunks.get(chunks.size() - 1);
+        assertThat(finishChunk.getMetadata().getUsage().getPromptTokens()).isEqualTo(59);
+        assertThat(finishChunk.getMetadata().getUsage().getCompletionTokens()).isEqualTo(4);
+        assertThat(finishChunk.getMetadata().getUsage().getTotalTokens()).isEqualTo(63);
     }
 
     @Test

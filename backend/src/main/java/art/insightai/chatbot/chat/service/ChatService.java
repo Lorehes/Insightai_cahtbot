@@ -3,18 +3,29 @@ package art.insightai.chatbot.chat.service;
 import art.insightai.chatbot.chat.domain.ChatChunk;
 import art.insightai.chatbot.chat.domain.Conversation;
 import art.insightai.chatbot.chat.domain.Message;
+import art.insightai.chatbot.chat.repository.MessageChatMemoryRepository;
+import art.insightai.chatbot.common.config.AppProperties;
+
+import com.openai.core.JsonValue;
+import com.openai.models.completions.CompletionUsage;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Service;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.SignalType;
 
+import java.math.BigDecimal;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -63,8 +74,13 @@ import java.util.concurrent.atomic.AtomicReference;
  *   "update a conversation's model" endpoint; adding one is out of this card's scope). RAG
  *   augmentation is out of scope for this Spec entirely (§2 Out of scope #1/#2 — separate {@code
  *   hybrid-rag} Spec) — {@link #streamReply} never branches on {@code conversation.isRagEnabled()}
- *   and builds a plain, single-turn prompt with no {@code RetrievalAugmentationAdvisor} and no
- *   conversation history (T10 adds history via {@code MessageWindowChatMemory}).
+ *   and never builds a {@code RetrievalAugmentationAdvisor} into the prompt. It does include prior
+ *   conversation turns as of this card (T10): {@link #chatMemory}, a {@link MessageWindowChatMemory}
+ *   built from {@link MessageChatMemoryRepository} in the constructor below, is read (never
+ *   written — see {@link MessageChatMemoryRepository}'s own class-level [Rationale] for why {@code
+ *   add()}/{@code saveAll()} are never called) inside {@link #streamReply}'s synchronous prelude;
+ *   that method's own [Rationale] explains exactly why a single {@code .messages(history)} call
+ *   replaces the previous {@code .user(userMessage)} call rather than sitting alongside it.
  */
 @Service
 public class ChatService {
@@ -77,10 +93,28 @@ public class ChatService {
 
     private final ChatClient chatClient;
     private final ConversationService conversationService;
+    private final ChatMemory chatMemory;
 
-    public ChatService(ChatClient.Builder chatClientBuilder, ConversationService conversationService) {
+    /**
+     * [Purpose] Wires the three collaborators {@link #streamReply} needs: the fluent LLM client,
+     *   the transactional persistence delegate, and (T10) the multi-turn history reader.
+     * [Rationale] {@code chatMemory} is built here, as a plain field, the same way {@code
+     *   chatClient} is built from its own {@code Builder} on the line above it — neither is
+     *   exposed as a separate {@code @Bean} — so this constructor is the one place that pairs
+     *   {@code chatMemoryRepository} with the {@code app.chat.memory.max-messages} window size
+     *   (Tech Review A-5). See {@link MessageChatMemoryRepository}'s own class-level [Caution] for
+     *   the one side effect of this choice: Spring AI's own autoconfiguration still creates a
+     *   second, unrelated, default-sized {@code ChatMemory} bean alongside this field, confirmed
+     *   harmless there.
+     */
+    public ChatService(ChatClient.Builder chatClientBuilder, ConversationService conversationService,
+            MessageChatMemoryRepository chatMemoryRepository, AppProperties appProperties) {
         this.chatClient = chatClientBuilder.build();
         this.conversationService = conversationService;
+        this.chatMemory = MessageWindowChatMemory.builder()
+                .chatMemoryRepository(chatMemoryRepository)
+                .maxMessages(appProperties.chat().memory().maxMessages())
+                .build();
     }
 
     /**
@@ -98,7 +132,17 @@ public class ChatService {
      *   content is exactly what a client reconstructs by concatenating every {@code delta} it
      *   received (chat:AC-25, chat:AC-29) — the accumulation happens inside {@link #toChunk}
      *   before that method decides what (if anything) goes into the outgoing chunk's own {@code
-     *   delta}, so it is complete independent of that decision.
+     *   delta}, so it is complete independent of that decision. {@code history} (T10) is this
+     *   method's second synchronous step, reusing {@code conversationIdText} — because it runs
+     *   after {@link #recordUserMessage} (Tech Review A-4's call order: ① 'user' row insert, ②
+     *   history read), the list {@link #chatMemory}{@code .get(...)} returns already ends with
+     *   this turn's own question, so {@code .messages(history)} below supplies both prior turns
+     *   (chat:AC-30) and this turn's question in one call. A separate {@code .user(userMessage)}
+     *   call was deliberately removed rather than kept alongside it: reading {@code
+     *   DefaultChatClientUtils.toChatClientRequest} (spring-ai-client-chat-2.0.1-sources.jar)
+     *   confirms the real {@link ChatClient} appends any {@code .messages(...)} contents and then
+     *   any {@code .user(...)} text as two independent, additive steps — keeping both would have
+     *   sent this turn's question to the LLM twice.
      * [Side effects] Throws {@code MessageQuotaExceededException} (via {@link
      *   ConversationService#enforceMessageQuota}) instead of doing anything else when {@code
      *   conversation}'s id already holds {@code app.session.max-messages-per-conversation} 'user'
@@ -113,26 +157,79 @@ public class ChatService {
      *   method's {@link Flux} chain (Tech Review A-8) — the caller has already performed every
      *   check that needs it, and subscription may happen on a different thread than the one that
      *   invoked this method. Do not consolidate the three termination hooks into a single {@code
-     *   doFinally(Consumer<SignalType>)} — a first attempt at this fix did exactly that and
-     *   was reverted after real test runs (not source reading alone) caught {@code
+     *   doFinally(Consumer<SignalType>)} — a first attempt at this fix did exactly that and was
+     *   reverted after real test runs (not source reading alone) caught {@code
      *   ConversationControllerIntegrationTest} losing the 'assistant' row under a {@code
      *   hasSize(2)} assertion on its fetched {@code messages} rows: {@code
      *   reactor.core.publisher.FluxDoFinally}'s {@code onComplete()}/{@code onError()} call
      *   {@code actual.onComplete()}/{@code actual.onError(t)} — i.e. forward the signal to the
-     *   downstream subscriber, which for
-     *   this endpoint is the servlet container writing the SSE response the test client reads —
-     *   *before* running the {@code doFinally} consumer, so a fast reader can observe the stream's
-     *   end and query {@code messages} before this class's INSERT has even executed. {@code
-     *   doOnComplete}/{@code doOnError} (backed by {@code FluxPeek}), by contrast, run their
-     *   callback *before* forwarding the signal downstream — confirmed by reading {@code
-     *   reactor-core-3.8.7-sources.jar}, not assumed — which is why the error path below embeds
-     *   its {@link #onStreamTerminated} call inside {@code onErrorResume}'s function (invoked to
-     *   *produce* the fallback publisher, therefore strictly before that publisher is subscribed
-     *   to and its one chunk reaches the client) rather than in a separate {@code doOnError}. The
-     *   three hooks must all stay upstream of {@code onErrorResume} in the chain below: only from
-     *   that position do {@code doOnComplete}/{@code doOnCancel} observe {@code chunks}' own
-     *   signals rather than the fallback publisher {@code onErrorResume} substitutes on error.
-     * [AC] chat:AC-34
+     *   downstream subscriber, which for this endpoint is the servlet container writing the SSE
+     *   response the test client reads — *before* running the {@code doFinally} consumer, so a
+     *   fast reader can observe the stream's end and query {@code messages} before this class's
+     *   INSERT has even executed. {@code doOnComplete}/{@code doOnError} (backed by {@code
+     *   FluxPeek}), by contrast, run their callback *before* forwarding the signal downstream —
+     *   confirmed by reading {@code reactor-core-3.8.7-sources.jar}, not assumed — which is why
+     *   the error path below embeds its {@link #onStreamTerminated} call inside {@code
+     *   onErrorResume}'s function (invoked to *produce* the fallback publisher, therefore
+     *   strictly before that publisher is subscribed to and its one chunk reaches the client)
+     *   rather than in a separate {@code doOnError}. The three hooks must all stay upstream of
+     *   {@code onErrorResume} in the chain below: only from that position do {@code
+     *   doOnComplete}/{@code doOnCancel} observe {@code chunks}' own signals rather than the
+     *   fallback publisher {@code onErrorResume} substitutes on error. Multi-turn history (T10)
+     *   also changed the order of magnitude of a paid call's prompt cost, and nothing added by
+     *   this card bounds it — the T10 review (2026-08-28, security Medium-1) found the three
+     *   existing defenses are all row-count axes, not a size/cost axis: {@code
+     *   ConversationController.SendMessageRequest#MAX_MESSAGE_LENGTH} caps one message at 4000
+     *   characters, {@code app.session.max-messages-per-conversation} caps a conversation at 200
+     *   'user' rows, and {@code app.chat.memory.max-messages} caps the window at 40 rows. <b>None
+     *   caps output length</b>: no {@code maxTokens} (or equivalent) is set anywhere in this
+     *   codebase — the {@code OpenAiChatOptions.builder().model(model).extraBody(...)} call this
+     *   method makes sets only the model id and (as of T11) OpenRouter's usage-include {@code
+     *   extraBody} flag, neither of which bounds output length, and {@code grep -rn
+     *   "maxTokens|max-tokens" backend/src/main/} returns zero matches. A
+     *   table-wide aggregate of {@code messages} rows captured during 2026-08-28 browser
+     *   verification (14 'user' rows / 14 'assistant' rows total, summed across multiple
+     *   conversations — not one 28-row conversation; see limit (2) below) measured 'user' rows at
+     *   18-111 characters (avg 54) and 'assistant' rows at 11-1750 characters (avg 517 — roughly
+     *   10x a 'user' row). Projecting that average across a full 40-row window (20 user + 20
+     *   assistant, instead of today's single ~54-character user message) gives roughly 20x54 +
+     *   20x517 = 11,420 characters, a character-based amplification of roughly <b>211x</b> — well
+     *   past the T10 review's message-*count*-based "up to ~40x" figure (the review's original 41
+     *   was off-by-one), which undercounts because it treats every row as the same size when
+     *   'assistant' rows run an order of magnitude longer than 'user' rows. Three limits apply to
+     *   the 211x figure: (1) characters are not tokens — the five catalog models tokenize
+     *   differently and mix Korean/English differently, so a character-based ratio is not
+     *   guaranteed to hold token-for-token; (2) it is a projection, not an observation — the
+     *   longest conversation actually seen has 6 messages, so the 40-row window has never once
+     *   been full, and the 517-character average was extrapolated to 20 turns, not measured at
+     *   that length; (3) the 'assistant' side's true worst case is unknown because nothing bounds
+     *   it — the 'user' side's worst case is computable (20 x 4000 = 80,000 characters) but there
+     *   is no equivalent ceiling on the other side. This gap was deliberately left uncoded pending
+     *   real data. <b>Update (T11, landed 2026-08-29):</b> {@code prompt_tokens}/{@code
+     *   completion_tokens}/{@code cost_usd} are now recorded per 'assistant' row (see {@link
+     *   #extractUsage}/{@link #extractCost}) — but whether to introduce {@code maxTokens} is still
+     *   not decided here, because the 211x figure above remains a projection, not an observation
+     *   (limit (2)): no conversation has yet filled the 40-row window this card's own recording
+     *   would need to confirm or refute that projection. Revisit once real operational traffic
+     *   accumulates enough {@code cost_usd}/token history to replace the projection with a
+     *   measurement, not from a guessed token budget. {@code maxTokens} is preferable to a
+     *   bespoke token-budget mechanism because it is a first-class model option that bounds both
+     *   the output and everything re-fed into the next turn's prompt at once — but setting it
+     *   produces {@code finish_reason = LENGTH}, which has been observed to flip eval judging to
+     *   a hallucination verdict while showing the user no truncation indicator ({@code
+     *   insight-chat-72}), so introducing {@code maxTokens} and adding an AC for a "response was
+     *   truncated" indicator must be decided together, not separately. Present risk from this gap
+     *   is small — {@code server.address: 127.0.0.1} restricts this to a single local presenter
+     *   demo, and no observed conversation has come close to filling the window — but that
+     *   premise does not survive Spec R-6's stage-① (LAN-wide exposure); revisit this note when
+     *   that stage is reached. The call-*count* side of this cap is tracked separately in {@code
+     *   ConversationController.sendMessage}'s {@code [Caution]} note (T9 review round 2, security
+     *   Low-1), whose acceptance of an unbounded call ceiling was made on 2026-08-27 — before
+     *   this per-call amplification was known; the two factors (call count and per-call cost)
+     *   multiply. The amplification arithmetic above is duplicated in Korean in {@code
+     *   application.yaml}'s {@code app.session.max-messages-per-conversation} comment; keep both
+     *   in sync when either changes.
+     * [AC] chat:AC-30, chat:AC-34
      */
     public Flux<ChatChunk> streamReply(Conversation conversation, String requestedModel, String userMessage) {
         UUID conversationId = conversation.getId();
@@ -146,26 +243,41 @@ public class ChatService {
         String titleIfUnset = conversation.getTitle() == null ? generateTitle(userMessage) : null;
         recordUserMessage(conversationId, titleIfUnset, userMessage);
 
+        // ② per Tech Review A-4's call order: this read happens strictly after the 'user' row
+        // above is inserted, so the returned history already ends with this turn's own question
+        // -- see this method's own [Rationale] for why that removes the need for a separate
+        // .user(userMessage) call below.
+        var history = chatMemory.get(conversationIdText);
+
         StringBuilder contentBuilder = new StringBuilder();
         AtomicReference<String> finishReasonHolder = new AtomicReference<>();
+        AtomicReference<ChatChunk.Usage> usageHolder = new AtomicReference<>();
         AtomicBoolean assistantMessageRecorded = new AtomicBoolean(false);
 
         Flux<ChatChunk> chunks = chatClient.prompt()
-                .user(userMessage)
-                .options(ChatOptions.builder().model(model))
+                .messages(history)
+                // extraBody is OpenRouter's own extension, not a standard OpenAI request field --
+                // S1 spike (state.md, 2026-08-25) confirmed the provider only attaches its `cost`
+                // field to the response's usage payload when this flag is set per request; the
+                // standard `include_usage` option (already defaulted on for streaming by
+                // OpenAiChatModel.createRequest()) gets prompt/completion token counts without it,
+                // but never `cost` (chat:AC-32, chat:AC-33).
+                .options(OpenAiChatOptions.builder().model(model)
+                        .extraBody(Map.of("usage", Map.of("include", true))))
                 .stream()
                 .chatResponse()
-                .map(response -> toChunk(response, conversationIdText, contentBuilder, finishReasonHolder));
+                .map(response -> toChunk(response, conversationIdText, contentBuilder, finishReasonHolder,
+                        usageHolder));
 
         return chunks
                 .doOnComplete(() -> onStreamTerminated(SignalType.ON_COMPLETE, assistantMessageRecorded,
-                        conversationId, model, contentBuilder, finishReasonHolder))
+                        conversationId, model, contentBuilder, finishReasonHolder, usageHolder))
                 .doOnCancel(() -> onStreamTerminated(SignalType.CANCEL, assistantMessageRecorded,
-                        conversationId, model, contentBuilder, finishReasonHolder))
+                        conversationId, model, contentBuilder, finishReasonHolder, usageHolder))
                 .onErrorResume(error -> {
                     log.error("스트리밍 중 오류 발생 (conversationId={})", conversationId, error);
                     onStreamTerminated(SignalType.ON_ERROR, assistantMessageRecorded, conversationId,
-                            model, contentBuilder, finishReasonHolder);
+                            model, contentBuilder, finishReasonHolder, usageHolder);
                     return Flux.just(ChatChunk.error(conversationIdText));
                 });
     }
@@ -187,11 +299,16 @@ public class ChatService {
      * [Side effects] Appends {@code text} to {@code contentBuilder} and, when this response
      *   carries a non-null finish reason, stores it in {@code finishReasonHolder} — {@link
      *   #streamReply}'s termination hooks (via {@link #onStreamTerminated}) read both once the
-     *   stream ends.
-     * [AC] chat:AC-25, chat:AC-26, chat:AC-27, chat:AC-28
+     *   stream ends. Likewise, when this response's {@code usage} is non-zero, extracts it via
+     *   {@link #extractUsage} and stores it in {@code usageHolder} (T11) — per the S1 spike
+     *   (state.md, 2026-08-25), every non-terminal delta chunk carries a zeroed {@code usage}
+     *   (prompt=0/completion=0/total=0), and the real token/cost summary lands only on the
+     *   stream's last {@link ChatResponse}, so {@code usageHolder} ends up holding exactly that
+     *   one response's extraction once the stream completes.
+     * [AC] chat:AC-25, chat:AC-26, chat:AC-27, chat:AC-28, chat:AC-32, chat:AC-33
      */
     private ChatChunk toChunk(ChatResponse response, String conversationId, StringBuilder contentBuilder,
-            AtomicReference<String> finishReasonHolder) {
+            AtomicReference<String> finishReasonHolder, AtomicReference<ChatChunk.Usage> usageHolder) {
         Generation result = response.getResult();
         String text = result.getOutput().getText();
         if (text == null) {
@@ -204,7 +321,86 @@ public class ChatService {
             finishReasonHolder.set(finishReason);
         }
 
-        return new ChatChunk(conversationId, text.isEmpty() ? null : text, finishReason, null);
+        ChatChunk.Usage usage = null;
+        Usage responseUsage = response.getMetadata().getUsage();
+        if (responseUsage != null && responseUsage.getTotalTokens() > 0) {
+            usage = extractUsage(responseUsage);
+            usageHolder.set(usage);
+        }
+
+        return new ChatChunk(conversationId, text.isEmpty() ? null : text, finishReason, usage);
+    }
+
+    /**
+     * [Purpose] Converts one Spring AI {@link Usage} into this card's wire/persistence shape:
+     *   prompt/completion token counts plus (if present) OpenRouter's {@code cost} extension
+     *   (S1 spike, chat:AC-32, chat:AC-33).
+     * [Rationale] {@link Usage#getPromptTokens()}/{@link Usage#getCompletionTokens()} are
+     *   type-safe first-class fields Spring AI already parses; {@code cost} is not — the S1
+     *   spike (state.md, 2026-08-25) found it survives only inside {@link Usage#getNativeUsage()},
+     *   which the real OpenAI Java SDK populates with a {@link CompletionUsage} whose unmapped
+     *   JSON properties (including {@code cost}) are preserved via {@code @JsonAnySetter}/
+     *   {@code _additionalProperties()} rather than dropped, so {@link #extractCost} is what
+     *   actually reads it.
+     * [AC] chat:AC-32, chat:AC-33
+     */
+    private static ChatChunk.Usage extractUsage(Usage usage) {
+        return new ChatChunk.Usage(usage.getPromptTokens(), usage.getCompletionTokens(),
+                extractCost(usage.getNativeUsage()));
+    }
+
+    /**
+     * [Purpose] Reads OpenRouter's {@code cost} extension out of the OpenAI SDK's native usage
+     *   object, as a {@link BigDecimal} (chat:AC-33).
+     * [Rationale] {@code nativeUsage} must be cast to the concrete SDK type
+     *   {@link CompletionUsage} — Spring AI's {@link Usage} interface never promotes {@code cost}
+     *   to a first-class field (S1 spike). {@code numberOpt.get().toString()} deliberately reads
+     *   the {@link JsonValue}'s number through its {@code String} form rather than {@code
+     *   doubleValue()} followed by {@link BigDecimal#valueOf(double)} — the monetary-type rule
+     *   (global CLAUDE.md §7.2-4) forbids this code from adding its own floating-point rounding
+     *   step on top of whatever the wire value already was. Whatever precision the OpenAI SDK's
+     *   own Jackson tree already collapsed the literal into before this method ever sees it (a
+     *   {@code DoubleNode}, since neither this project nor the SDK enables {@code
+     *   USE_BIG_DECIMAL_FOR_FLOATS} — confirmed by reading {@code
+     *   openai-java-core-4.49.0-sources.jar}'s {@code ObjectMappers.kt}) is a boundary this method
+     *   cannot undo; it only guarantees it does not lose further precision itself, and that the
+     *   one {@link BigDecimal} produced here is the exact value both {@link #toChunk}'s wire
+     *   {@code usage.cost} and {@link #recordAssistantMessage}'s persisted {@code cost_usd} column
+     *   end up holding (they read the same {@code usageHolder} entry — chat:AC-33's "응답의 값 =
+     *   DB 행의 값" holds by construction, not by coincidence).
+     * [Caution] Returns {@code null} whenever {@code nativeUsage} is not a {@link CompletionUsage},
+     *   the {@code "cost"} additional property is absent (e.g. {@code extraBody}'s usage-
+     *   include flag was not honored by the provider), or the property's numeric literal cannot be
+     *   parsed into a {@link BigDecimal} (2026-08-29 review L5) — e.g. {@code "NaN"}/{@code
+     *   "Infinity"}, which {@link BigDecimal#BigDecimal(String)} rejects with a {@code
+     *   NumberFormatException}. Reachability of that last case is not confirmed either way:
+     *   standard JSON has no non-numeric number literal, but whether the OpenAI SDK's Jackson
+     *   configuration enables {@code ALLOW_NON_NUMERIC_NUMBERS}-style parsing of such tokens if
+     *   OpenRouter ever sent one was not checked. The guard costs nothing if unreachable and, if it
+     *   ever is reached, keeps this one bad value from turning an otherwise-successful, already
+     *   fully-billed response into {@link ChatChunk#error} for the caller (the exception would
+     *   otherwise propagate out of {@link #toChunk}'s {@code map} and be caught by {@link
+     *   #streamReply}'s {@code onErrorResume}) — every caller must still treat a {@code null} cost
+     *   as "unknown", never coerce it to zero.
+     * [AC] chat:AC-33
+     */
+    private static BigDecimal extractCost(Object nativeUsage) {
+        if (!(nativeUsage instanceof CompletionUsage completionUsage)) {
+            return null;
+        }
+        JsonValue costValue = completionUsage._additionalProperties().get("cost");
+        if (costValue == null) {
+            return null;
+        }
+        Optional<Number> costNumber = costValue.asNumber();
+        if (costNumber.isEmpty()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(costNumber.get().toString());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**
@@ -249,7 +445,8 @@ public class ChatService {
      *   guard, chat:AC-29's "assistant 1행" would break in that edge case.
      */
     private void onStreamTerminated(SignalType signalType, AtomicBoolean recorded, UUID conversationId,
-            String model, StringBuilder contentBuilder, AtomicReference<String> finishReasonHolder) {
+            String model, StringBuilder contentBuilder, AtomicReference<String> finishReasonHolder,
+            AtomicReference<ChatChunk.Usage> usageHolder) {
         if (!recorded.compareAndSet(false, true)) {
             return;
         }
@@ -258,7 +455,7 @@ public class ChatService {
             case ON_ERROR -> ChatChunk.FINISH_REASON_ERROR;
             default -> finishReasonHolder.get();
         };
-        recordAssistantMessage(conversationId, model, contentBuilder.toString(), finishReason);
+        recordAssistantMessage(conversationId, model, contentBuilder.toString(), finishReason, usageHolder.get());
     }
 
     /**
@@ -269,18 +466,27 @@ public class ChatService {
      * [Rationale] {@code content} is whatever {@link #toChunk} accumulated before the terminal
      *   signal — the full answer on success (chat:AC-29), or only the tokens received before
      *   failure/cancellation on the other two paths (possibly {@code ""}, which {@code
-     *   messages.content}'s {@code NOT NULL} constraint accepts). {@code promptTokens}/{@code
-     *   completionTokens}/{@code costUsd}/{@code sources} are {@code null} here on purpose:
-     *   token/cost accounting is T11's scope (project card boundary, not implemented by this
-     *   card) and source citations belong to the separate {@code hybrid-rag} Spec (chat Spec §2
-     *   Out of scope #1) — this card writes neither. Delegates the actual persistence to {@link
-     *   ConversationService#persistAssistantTurn} — see class [Rationale] for why this class never
-     *   calls a repository directly for this.
-     * [AC] chat:AC-29
+     *   messages.content}'s {@code NOT NULL} constraint accepts). {@code usage} (T11) is whatever
+     *   {@link #toChunk} last stored in {@code usageHolder} — the same {@link ChatChunk.Usage}
+     *   instance the client's own last-chunk {@code usage} field carries, so {@code
+     *   promptTokens}/{@code completionTokens}/{@code costUsd} persisted below are identical to
+     *   the response the caller already received (chat:AC-32, chat:AC-33), not a second,
+     *   independently-derived read. {@code usage} stays {@code null} on the error/cancel paths
+     *   whenever no chunk ever reached a non-zero usage before the stream terminated — those rows
+     *   keep {@code null} token/cost columns exactly as before this card. {@code sources} is still
+     *   {@code null} here on purpose: source citations belong to the separate {@code hybrid-rag}
+     *   Spec (chat Spec §2 Out of scope #1), untouched by this card. Delegates the actual
+     *   persistence to {@link ConversationService#persistAssistantTurn} — see class [Rationale]
+     *   for why this class never calls a repository directly for this.
+     * [AC] chat:AC-29, chat:AC-32, chat:AC-33
      */
-    private void recordAssistantMessage(UUID conversationId, String model, String content, String finishReason) {
-        Message message = new Message(
-                conversationId, Message.ROLE_ASSISTANT, content, model, null, null, null, null, finishReason);
+    private void recordAssistantMessage(UUID conversationId, String model, String content, String finishReason,
+            ChatChunk.Usage usage) {
+        Integer promptTokens = usage != null ? usage.promptTokens() : null;
+        Integer completionTokens = usage != null ? usage.completionTokens() : null;
+        BigDecimal costUsd = usage != null ? usage.cost() : null;
+        Message message = new Message(conversationId, Message.ROLE_ASSISTANT, content, model,
+                promptTokens, completionTokens, costUsd, null, finishReason);
         conversationService.persistAssistantTurn(message);
     }
 

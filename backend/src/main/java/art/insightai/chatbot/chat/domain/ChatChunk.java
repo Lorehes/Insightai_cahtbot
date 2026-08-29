@@ -13,15 +13,22 @@ import java.math.BigDecimal;
  *   endpoint (chat:AC-18/22 forbade any LLM call at that stage, so nothing was ever emitted yet).
  *   T9 is the first card to actually emit populated chunks — see {@link
  *   art.insightai.chatbot.chat.service.ChatService#streamReply} for how {@code delta}/{@code
- *   finishReason} are filled in per streamed response; {@code usage} stays {@code null} on every
- *   chunk this card emits (token/cost accounting is T11's scope, not T9's).
+ *   finishReason} are filled in per streamed response; {@code usage} stayed {@code null} on
+ *   every chunk T9 emitted (token/cost accounting was T11's scope, not T9's) — T11 is what
+ *   populates it, on the one final chunk of a successful stream (see that method's own
+ *   [Rationale]/[Side effects] for the extraction path).
  * [Caution] {@code usage}'s token fields must stay {@code snake_case}
  *   ({@code @JsonProperty}) — AC-32/33 fix the wire field names as
  *   {@code usage.prompt_tokens}/{@code usage.cost}. {@code cost} is {@link BigDecimal} per the
- *   monetary-type rule (global CLAUDE.md §7.2-4), never a floating-point type; pair it with
- *   {@code spring.jackson.generator.write-bigdecimal-as-plain: true} (A-6) once a card actually
- *   populates it — not added to application.yaml yet since no card before T11 ever sets a
- *   non-null {@code cost}. {@link #error}'s message becomes {@code delta} on the wire and is
+ *   monetary-type rule (global CLAUDE.md §7.2-4), never a floating-point type; T11 pairs it with
+ *   {@code spring.jackson.write.write-bigdecimal-as-plain: true} in {@code application.yaml} so
+ *   this field never serializes in scientific notation (chat:AC-33) — note this is the Jackson
+ *   3 (Boot 4's {@code tools.jackson}, confirmed via {@code spring-boot-jackson-4.1.1}'s
+ *   {@code JacksonProperties} bytecode: its {@code write} map binds {@code
+ *   tools.jackson.core.StreamWriteFeature}) property path, not classic Jackson 2's
+ *   {@code spring.jackson.generator.*} (there is no {@code generator} map on this project's
+ *   {@code JacksonProperties} — that name was this comment's earlier, pre-T11 guess). {@link
+ *   #error}'s message becomes {@code delta} on the wire and is
  *   shown to the end user; as of chat T9 rework (2026-08-27, security L9) that text is a fixed
  *   {@link #STREAM_ERROR_MESSAGE} constant defined on this record, not a caller-supplied
  *   argument — {@link #error} takes only {@code conversationId}, so there is no longer a
@@ -31,7 +38,6 @@ import java.math.BigDecimal;
  *   server-side by the caller ({@code ChatService#streamReply}'s error branch), never by this
  *   record.
  */
-// TODO(chat): Add spring.jackson.generator.write-bigdecimal-as-plain=true to application.yaml before T11 populates Usage.cost (Tech Review A-6, AC-33 precondition risk)
 public record ChatChunk(
         String conversationId,
         String delta,

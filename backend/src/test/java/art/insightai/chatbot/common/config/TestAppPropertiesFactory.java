@@ -8,8 +8,8 @@ import org.springframework.util.unit.DataSize;
 /**
  * [Purpose] Shared fixture factory for a valid {@link AppProperties} (or the {@code app.models.*}
  * property-string slice of one), for any test outside {@code common/config} that needs the
- * six-record aggregate to bind/construct successfully but is not itself testing
- * Search/Rerank/Ingest/Session/Models.
+ * seven-record aggregate to bind/construct successfully but is not itself testing
+ * Search/Rerank/Ingest/Session/Models/Chat.
  * [Rationale] chat Spec T5 added {@code AppProperties.Models} as a sixth record component with no
  * {@code @DefaultValue} (chat Spec §5 A-10 requires the catalog itself, not just a shape, to come
  * from application.yaml). That makes every test that resolves {@code AppProperties} -- whether
@@ -82,11 +82,11 @@ public final class TestAppPropertiesFactory {
     }
 
     /**
-     * [Purpose] Builds a full six-component {@link AppProperties} from valid defaults, letting a
+     * [Purpose] Builds a full seven-component {@link AppProperties} from valid defaults, letting a
      * caller override individual components (e.g. {@code .search(...)} for {@code
      * ReciprocalRankFusionTest}'s per-call RRF parameters, {@code .rerank(...)} for {@code
      * OpenRouterRerankAdapterTest}'s enabled/disabled cases, {@code .session(...)} for {@code
-     * AnonymousUserServiceTest}'s low-ceiling quota case) without hand-repeating the other five.
+     * AnonymousUserServiceTest}'s low-ceiling quota case) without hand-repeating the other six.
      */
     public static final class Builder {
 
@@ -100,6 +100,7 @@ public final class TestAppPropertiesFactory {
                 List.of("text/plain"), 2000, 500, 100);
         private AppProperties.Session session = new AppProperties.Session(1000, 50, 200);
         private AppProperties.Models models = validModels();
+        private AppProperties.Chat chat = new AppProperties.Chat(new AppProperties.Chat.Memory(40));
 
         private Builder() {
         }
@@ -134,8 +135,13 @@ public final class TestAppPropertiesFactory {
             return this;
         }
 
+        public Builder chat(AppProperties.Chat chat) {
+            this.chat = chat;
+            return this;
+        }
+
         public AppProperties build() {
-            return new AppProperties(auth, search, rerank, ingest, session, models);
+            return new AppProperties(auth, search, rerank, ingest, session, models, chat);
         }
     }
 }

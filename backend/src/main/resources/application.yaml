@@ -31,6 +31,21 @@ spring:
     converters:
       string-encoding-charset: UTF-8
 
+  # T11(chat:AC-33): usage.cost(BigDecimal, 예: 2.25E-6)가 SSE 응답에서 지수 표기로 직렬화되지
+  # 않도록 고정 소수점(plain) 표기를 강제한다. Boot 4 기본 Jackson 은 tools.jackson(Jackson 3)
+  # 이라 classic Jackson 2의 spring.jackson.generator.* 경로가 아니라 spring.jackson.write.*
+  # (tools.jackson.core.StreamWriteFeature 바인딩, spring-boot-jackson-4.1.1 JacksonProperties
+  # 바이트코드로 확인)를 쓴다.
+  # --- 적용 범위 (2026-08-29 리뷰 L4) ---
+  # 이 설정은 앱 전역 직렬화에 적용되므로 T11 범위(usage.cost) 밖의 BigDecimal 필드 표기도
+  # 함께 바뀐다 -- 실측 대상: usage/ModelUsage·UsageTotals·UsageSummary·UsageController
+  # (GET /api/admin/usage 의 totalCostUsd/costUsd), eval/judge/EvalResponse,
+  # eval/report/EvalReportRow·EvalReportAggregator, chat/domain/Message. 값 자체가 아니라
+  # 표기(지수 vs 고정소수점)만 바뀌므로 이 필드들의 정합성에는 영향이 없다.
+  jackson:
+    write:
+      write-bigdecimal-as-plain: true
+
   # infra/.env 를 프로퍼티 소스로 읽는다.
   # 터미널 실행 시 cwd=backend/, IntelliJ 실행 시 cwd=프로젝트 루트일 수 있어 두 경로를 모두 시도한다.
   # [.properties] 로 파싱되므로 export/따옴표/백슬래시를 값에 쓰지 않는다.
@@ -134,6 +149,38 @@ app:
     # 두 상한 모두 도달하지 않은 채로 유료 호출이 무제한 발생할 수 있다 (T9 review 2026-08-27
     # Medium-3, 사용자 결정 D-3①). 200은 §7 OQ-7이 고정한 ChatMemory 윈도우(최근 20턴)의 10배로,
     # 정상적인 데모 대화량에는 넉넉하고 실측 근거는 없다 -- eval-usage-dashboard Spec D7에서 재검토.
+    #
+    # --- 정정 (2026-08-28, T10 리뷰 security Medium-1) ---
+    # 위 "ChatMemory 윈도우(최근 20턴)의 10배" 도출은 윈도우를 행 수 축으로만 계산한 것이다 --
+    # T9 시점에는 프롬프트가 이번 턴 user 메시지 1건뿐이었으므로 그 계산이 맞았다. T10이
+    # `.messages(history)`로 멀티턴을 프롬프트에 실은 뒤로는 같은 200회 호출이 소비하는 프롬프트
+    # 총량이 O(n)에서 O(n × 윈도우)로 바뀌어 이 도출은 낡았다 -- 이제 매 호출이 최대 40행
+    # (user 20 + assistant 20)을 프롬프트에 싣는다. 실측(2026-08-28 브라우저 검증 중 쌓인
+    # messages 테이블 전체 집계 -- 대화 1개가 아니라 여러 대화에 걸친 합산이다 -- user 14건
+    # min18/avg54/max111자, assistant 14건 min11/avg517/max1750자,
+    # assistant가 user의 약 10배)을 20턴 윈도우로 투영하면 20×54 + 20×517 = 1,080 +
+    # 10,340 = 11,420자로, 문자 기준 증폭 ≈ 211배다(리뷰가 계산한 "최대 40배"(리뷰 원문은 41로
+    # 표기했으나 off-by-one)는 메시지 개수 기준이라 과소평가다 -- assistant 메시지가 user보다 훨씬
+    # 길다는 사실을 반영하지 못한다). 한계 3가지 -- ① 문자 ≠ 토큰: 카탈로그 5개 모델의 토크나이저와
+    # 한국어·영어 비율이 전부 달라 문자 기준 비율이 토큰 기준으로도 같다는 보장이 없다.
+    # ② 211배는 관측이 아니라 투영이다 -- 실제 관측된 최대 대화는 6 메시지뿐이라 40행 윈도우가
+    # 찬 적이 한 번도 없고, 517자 평균을 20턴으로 외삽한 값이다. ③ assistant 측은 출력 길이
+    # 상한(maxTokens 등)이 전혀 없어 최악값이 미상이다 -- user 측 최악(20×4000=80,000자)은
+    # 계산되지만 assistant 측은 계산되지 않는다. 이번 카드는 이 상한을 의도적으로 코드로 고치지
+    # 않았다.
+    # --- 갱신 (T11, 2026-08-29 착지) ---
+    # assistant 행에 prompt_tokens/completion_tokens/cost_usd 실측 기록이 시작됐다
+    # (ChatService#extractUsage/#extractCost). 그러나 maxTokens 도입 여부는 아직 그 실측만으로
+    # 판단하지 않는다 -- 위 211배 수치는 여전히 투영이지 관측이 아니다(한계 ②): 40행 윈도우가
+    # 찬 대화가 아직 없어 이 카드의 기록 자체가 그 투영을 확인/반증할 만큼 쌓이지 않았다.
+    # 실운영 트래픽이 쌓여 cost_usd/토큰 이력이 충분해진 뒤 재판단한다. maxTokens는 출력과 다음 턴 재투입 양쪽을 동시에
+    # 묶는 1급 모델 옵션이라 별도 토큰 예산 메커니즘을 새로 만드는 것보다 낫지만, 걸면
+    # finish_reason=LENGTH가 발생하고 그것이 eval 판정을 환각으로 뒤집으며 사용자 화면에는 잘림
+    # 표시가 없다(insight-chat-72에서 발견) -- 따라서 maxTokens 도입과 "LENGTH 잘림 표시 AC
+    # 신설"은 함께 판단해야 한다. 현재 위험 수준: server.address: 127.0.0.1 로 로컬 데모 1인
+    # 단계에 한정돼 있고 관측된 최대 대화도 6 메시지뿐이라 실질 위험은 작다 -- 이 전제는 Spec
+    # R-6 ①단계(사내망 공개)에서 무너지므로 그 시점에 이 노트를 다시 열어야 한다. 계산 근거는
+    # ChatService#streamReply Javadoc [Caution] 에도 동일하게 있다.
     max-messages-per-conversation: 200
   models:
     # GET /api/models 이 반환하는 고정 카탈로그 (chat Spec §5 A-10/A-11, T5).
@@ -155,6 +202,12 @@ app:
         display-name: Gemini 2.5 Flash (Google)
       - id: anthropic/claude-haiku-4.5
         display-name: Claude Haiku 4.5 (Anthropic)
+  chat:
+    memory:
+      # ChatMemory 윈도우 크기 = 최근 20턴(user+assistant 각 1행) x 2 = 40행. §7 OQ-7 사용자 결정
+      # ("최근 20턴 고정"). MessageChatMemoryRepository.findByConversationId 가 이 값만큼만 최근
+      # messages 행을 잘라 LLM 프롬프트에 싣는다 (Tech Review A-5, T10).
+      max-messages: 40
 
 logging:
   level:
