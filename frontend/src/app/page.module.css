@@ -1,0 +1,10 @@
+/* F1 최소 확인 화면 전용 레이아웃. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  min-height: 100vh;
+}

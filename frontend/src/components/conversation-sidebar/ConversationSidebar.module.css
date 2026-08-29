@@ -1,0 +1,100 @@
+/* Card F3 conversation sidebar. Reuses existing design tokens
+   (--space-sm/--space-md/--color-border/--foreground/--background, globals.css) --
+   no new tokens introduced, no hardcoded colors/spacing. */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 16rem;
+  flex-shrink: 0;
+  padding: var(--space-md);
+  border-right: 1px solid var(--color-border);
+}
+
+.newButton {
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  font: inherit;
+  font-weight: bold;
+}
+
+.newButton:focus-visible,
+.selectButton:focus-visible,
+.selectButtonActive:focus-visible,
+.deleteButton:focus-visible {
+  outline: 2px solid var(--foreground);
+  outline-offset: 2px;
+}
+
+.newButton:disabled,
+.selectButton:disabled,
+.selectButtonActive:disabled,
+.deleteButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  list-style: none;
+  overflow-y: auto;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.selectButton,
+.selectButtonActive {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Selected state is marked by weight + border thickness, not color alone -- aria-current
+   carries the same information non-visually (accessibility default: color must not be the
+   only channel). */
+.selectButtonActive {
+  font-weight: bold;
+  border-color: var(--foreground);
+  border-width: 2px;
+}
+
+.deleteButton {
+  padding: var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+.empty,
+.error {
+  color: var(--foreground);
+}
+
+.error {
+  font-weight: bold;
+}

@@ -1,0 +1,71 @@
+/* Card F2 message transcript. Reuses F1's placeholder design tokens
+   (--space-sm/--space-md/--color-border/--foreground/--background, globals.css) --
+   no new tokens introduced, no hardcoded colors/spacing. */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  list-style: none;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.userRow,
+.assistantRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  max-width: 42rem;
+}
+
+/* Distinguished by position, not color alone -- the role label text is the primary,
+   always-present signal (accessibility default: color/position alone must not carry
+   information for a user who cannot perceive layout). */
+.userRow {
+  align-self: flex-end;
+}
+
+.assistantRow {
+  align-self: flex-start;
+}
+
+.roleLabel {
+  font-size: 0.75rem;
+  font-weight: bold;
+  color: var(--foreground);
+}
+
+.plainText {
+  white-space: pre-wrap;
+}
+
+.empty {
+  color: var(--foreground);
+}
+
+/* globals.css resets `* { margin: 0; padding: 0; }`, which would otherwise leave
+   react-markdown's headings/paragraphs touching each other and <ul>/<ol> unindented. */
+.markdown * + * {
+  margin-top: var(--space-sm);
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: var(--space-md);
+}
+
+.markdown pre {
+  padding: var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  overflow-x: auto;
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.markdown code {
+  font-family: var(--font-geist-mono), monospace;
+}
