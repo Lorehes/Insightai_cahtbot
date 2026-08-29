@@ -2,8 +2,10 @@ package art.insightai.chatbot.rag.retrieval;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.boot.json.JsonParseException;
 import org.springframework.boot.json.JsonParser;
@@ -31,8 +33,10 @@ import art.insightai.chatbot.rag.domain.RetrievedChunk;
  *   (Tech Review D-T2), so this adapter only needs the BM25-only half of that example — there is
  *   no join or aggregate here at all.
  * [Caution] The query string MUST reach the database as a bound parameter (Tech Review D-T5,
- *   this Spec's explicit SQL-injection guard for the one adapter in this project that runs a
- *   raw hand-written SQL string against user-influenced input) — never string-concatenate it
+ *   this Spec's explicit SQL-injection guard for hand-written SQL run against user-influenced
+ *   input — since T13/D-T11, {@link VectorStoreSearchAdapter} runs the same kind of raw SQL for
+ *   the vector axis and documents the identical bound-parameter requirement there; this is no
+ *   longer the only adapter in this project doing so) — never string-concatenate it
  *   into {@code BM25_SEARCH_SQL}. This query MUST keep using the {@code |||} (match disjunction)
  *   operator, never {@code @@@}: {@code @@@} parses its right-hand side as a ParadeDB query-DSL
  *   expression even when it arrives as a bound parameter, so an adversarial value still reaches
@@ -57,6 +61,27 @@ import art.insightai.chatbot.rag.domain.RetrievedChunk;
  *   still adds no new dependency (project rule #7): Jackson already arrives transitively
  *   regardless of this adapter, and this class depends only on the pre-existing {@code JsonParser}
  *   abstraction, never on Jackson's API directly.
+ * [Caution] T13/Tech Review D-T10 added a second, unconditional round trip: every {@link #search}
+ *   call starts by running {@link NonIndexedDocumentLookup#findAll()} to fetch the current
+ *   non-{@code INDEXED} document id population (hybrid-rag:AC-15 — orphaned chunks left behind by
+ *   a document that never reached {@code INDEXED} must never surface here). That query carries no
+ *   bind parameters, so {@link JdbcTemplate} issues it via a plain {@code java.sql.Statement}, not
+ *   a {@code PreparedStatement} — {@code
+ *   ParadeDbBm25SearchAdapterIntegrationTest#populatesContentMetadataAndScoreFromASingleQueryWithoutNPlusOne}'s
+ *   {@code PreparedStatement}-count assertion (still exactly 1, unchanged by this card) therefore
+ *   does not observe it; that test's own comment explains why. Which of the two SQL strings below
+ *   actually runs is conditional on that population's size: when it is empty, {@link
+ *   #BM25_SEARCH_SQL} runs unchanged (the original "no N+1" case); when it is non-empty, {@link
+ *   #BM25_SEARCH_SQL_WITH_EXCLUSION_TEMPLATE} runs instead, adding exactly one more
+ *   bound-parameter predicate ({@code AND metadata->>'document_id' NOT IN (...)}) — still no join,
+ *   and still a fixed number of round trips (2) regardless of how many documents are excluded or
+ *   how many rows the main query returns. The excluded ids themselves are always bound JDBC
+ *   parameters, never string-concatenated, for the same injection reason as {@code query} above.
+ * [Caution] {@code metadata->>'document_id'} returns SQL {@code NULL} for a row whose {@code
+ *   metadata} has no {@code document_id} key; {@code NULL NOT IN (...)} evaluates to {@code NULL}
+ *   (not {@code true}), so such a row is silently excluded from every result whenever the
+ *   exclusion list is non-empty (T13 review Low L-1) — the same {@code NOT IN} sharp edge {@link
+ *   VectorStoreSearchAdapter} documents on its own exclusion predicate.
  */
 @Component
 public class ParadeDbBm25SearchAdapter implements Bm25SearchPort {
@@ -68,7 +93,8 @@ public class ParadeDbBm25SearchAdapter implements Bm25SearchPort {
      * that join to begin with — confirmed by {@code EXPLAIN (ANALYZE)} against the live
      * container showing a plain {@code Custom Scan (ParadeDB Base Scan)} /
      * {@code TopKScanExecState} plan with no DataFusion warning at all (dev-log has the full
-     * plan output).
+     * plan output). Used only when {@link NonIndexedDocumentLookup#findAll()} returns empty
+     * (T13/D-T10 — "집합이 비면 필터 자체를 생략한다").
      */
     private static final String BM25_SEARCH_SQL =
             "SELECT id, content, metadata, pdb.score(id) AS score "
@@ -77,24 +103,69 @@ public class ParadeDbBm25SearchAdapter implements Bm25SearchPort {
                     + "ORDER BY score DESC "
                     + "LIMIT ?";
 
+    /**
+     * [Purpose] Same query as {@link #BM25_SEARCH_SQL} plus an exclusion predicate for orphaned
+     *   chunks (T13/D-T10, hybrid-rag:AC-15) — used only when {@link #search} finds a non-empty
+     *   exclusion population.
+     * [Caution] {@code %s} is substituted with a placeholder list ({@code "?, ?, ..."}) sized to
+     *   that population — never with an id value itself — before this string reaches {@link
+     *   JdbcTemplate}; every actual excluded id still arrives as its own bound parameter. This is
+     *   still a single-table, no-join predicate (a plain {@code NOT IN} list, not a subquery or a
+     *   join against {@code documents}), so it does not reintroduce Risk R-B.
+     */
+    private static final String BM25_SEARCH_SQL_WITH_EXCLUSION_TEMPLATE =
+            "SELECT id, content, metadata, pdb.score(id) AS score "
+                    + "FROM vector_store_bgem3 "
+                    + "WHERE content ||| ? "
+                    + "AND metadata->>'document_id' NOT IN (%s) "
+                    + "ORDER BY score DESC "
+                    + "LIMIT ?";
+
     private final JdbcTemplate jdbcTemplate;
     private final JsonParser jsonParser;
+    private final NonIndexedDocumentLookup nonIndexedDocumentLookup;
 
-    public ParadeDbBm25SearchAdapter(JdbcTemplate jdbcTemplate) {
+    public ParadeDbBm25SearchAdapter(
+            JdbcTemplate jdbcTemplate, NonIndexedDocumentLookup nonIndexedDocumentLookup) {
         this.jdbcTemplate = jdbcTemplate;
         this.jsonParser = JsonParserFactory.getJsonParser();
+        this.nonIndexedDocumentLookup = nonIndexedDocumentLookup;
     }
 
     /**
-     * [Purpose] Runs the BM25 axis query and maps each row straight to a {@link RetrievedChunk}.
-     * [Caution] {@code query} and {@code topK} are passed as JDBC bind parameters (the
-     *   {@code ?} placeholders below), never concatenated into the SQL text — see this class's
-     *   [Caution] for why that is a hard requirement here.
+     * [Purpose] Runs the BM25 axis query and maps each row straight to a {@link RetrievedChunk},
+     *   excluding chunks that belong to a non-{@code INDEXED} document (T13/D-T10).
+     * [Caution] {@code query}, {@code topK}, and every excluded document id are passed as JDBC
+     *   bind parameters, never concatenated into the SQL text — see this class's [Caution] for
+     *   why that is a hard requirement here.
      * [AC] hybrid-rag:AC-13
+     * [AC] hybrid-rag:AC-15
      */
     @Override
     public List<RetrievedChunk> search(String query, int topK) {
-        return jdbcTemplate.query(BM25_SEARCH_SQL, this::mapRow, query, topK);
+        List<String> excludedDocumentIds = excludedDocumentIds();
+        if (excludedDocumentIds.isEmpty()) {
+            return jdbcTemplate.query(BM25_SEARCH_SQL, this::mapRow, query, topK);
+        }
+        String placeholders =
+                excludedDocumentIds.stream().map(id -> "?").collect(Collectors.joining(", "));
+        String sql = String.format(BM25_SEARCH_SQL_WITH_EXCLUSION_TEMPLATE, placeholders);
+        List<Object> params = new ArrayList<>(excludedDocumentIds.size() + 2);
+        params.add(query);
+        params.addAll(excludedDocumentIds);
+        params.add(topK);
+        return jdbcTemplate.query(sql, this::mapRow, params.toArray());
+    }
+
+    /**
+     * [Purpose] Fetches this axis's exclusion population (T13/D-T10) and narrows it to the id
+     *   values {@link #search} needs.
+     * [Caution] {@code status} is intentionally not read here — see {@link
+     *   NonIndexedDocumentLookup}'s Javadoc for why it is retained at the query site instead of
+     *   being dropped.
+     */
+    private List<String> excludedDocumentIds() {
+        return nonIndexedDocumentLookup.findAll().stream().map(NonIndexedDocument::id).toList();
     }
 
     /**

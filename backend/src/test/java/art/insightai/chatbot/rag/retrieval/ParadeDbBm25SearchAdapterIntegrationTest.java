@@ -62,6 +62,7 @@ class ParadeDbBm25SearchAdapterIntegrationTest extends IntegrationTestBase {
     private DataSource dataSource;
 
     private final List<UUID> insertedDocumentIds = new ArrayList<>();
+    private final List<UUID> insertedDocumentTableIds = new ArrayList<>();
 
     @AfterEach
     void cleanUpInsertedRows() {
@@ -71,6 +72,10 @@ class ParadeDbBm25SearchAdapterIntegrationTest extends IntegrationTestBase {
                     documentId.toString());
         }
         insertedDocumentIds.clear();
+        for (UUID documentId : insertedDocumentTableIds) {
+            jdbcTemplate.update("DELETE FROM documents WHERE id = ?", documentId);
+        }
+        insertedDocumentTableIds.clear();
     }
 
     @Test
@@ -106,27 +111,70 @@ class ParadeDbBm25SearchAdapterIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
+    @DisplayName("[hybrid-rag:AC-15] documents.status 가 INDEXED 가 아닌 문서의 청크는 BM25 검색 결과에서 "
+            + "제외되고, INDEXED 문서의 청크는 같은 쿼리로 반환된다 (양성 대조)")
+    void excludesChunksOfNonIndexedDocumentsFromBm25SearchWithPositiveControl() {
+        // given: two documents seeded with a shared, distinctive query token -- one INDEXED
+        // (positive control, proves the query itself can see matching rows at all), one FAILED
+        // (an orphaned chunk per document-ingestion T8 review correctness Medium-2: a
+        // compensating delete that itself fails leaves the document FAILED while its chunk
+        // survives in vector_store_bgem3)
+        UUID indexedDocumentId = UUID.randomUUID();
+        UUID failedDocumentId = UUID.randomUUID();
+        insertDocument(indexedDocumentId, "INDEXED");
+        insertDocument(failedDocumentId, "FAILED");
+        insertChunk(indexedDocumentId, "제품코드 AC15TOKEN 는 인덱싱된 문서의 청크입니다.");
+        insertChunk(failedDocumentId, "제품코드 AC15TOKEN 는 고아 청크입니다.");
+
+        // when
+        List<RetrievedChunk> result = adapter.search("AC15TOKEN", 20);
+
+        // then: positive control first -- the INDEXED document's chunk IS returned. A bare
+        // "0 results" assertion for the FAILED case alone would be ambiguous between "the filter
+        // worked" and "the query is broken and returns nothing at all" -- this line rules out the
+        // second reading before the exclusion assertion below is trusted.
+        assertThat(result)
+                .extracting(chunk -> chunk.metadata().get("document_id"))
+                .contains(indexedDocumentId.toString());
+        // then: the FAILED document's chunk is excluded despite matching the same query
+        assertThat(result)
+                .extracting(chunk -> chunk.metadata().get("document_id"))
+                .doesNotContain(failedDocumentId.toString());
+    }
+
+    @Test
     @DisplayName("한 쿼리 결과만으로 content·metadata·score 가 모두 채워지고, "
-            + "search() 1회당 SQL 실행이 정확히 1회다 (N+1 없음)")
+            + "search() 1회당 PreparedStatement 실행이 정확히 1회다 (N+1 없음)")
     void populatesContentMetadataAndScoreFromASingleQueryWithoutNPlusOne() {
         // given: a counting JdbcTemplate built on top of the real, live DataSource -- the
         // adapter under test is a fresh instance wired to it so the count reflects exactly this
         // one search() call (review 2026-08-26 High-3: the previous version of this test never
-        // counted anything, so a second lookup added inside mapRow would still have passed)
+        // counted anything, so a second lookup added inside mapRow would still have passed).
+        // T13/D-T10 note: adapter.search() now ALSO runs NonIndexedDocumentLookup#findAll() first
+        // (hybrid-rag:AC-15) -- a real second round trip against the live container -- but that
+        // query has no bind parameters, so JdbcTemplate.query(String, RowMapper) issues it via a
+        // plain java.sql.Statement, not PreparedStatement (confirmed by this test failing at
+        // "expected 2 / was 1" before this comment was corrected). CountingDataSource's own
+        // Javadoc scopes it to prepareStatement calls specifically, so it does not observe that
+        // second query -- the count below still measures exactly what it always measured: no
+        // additional PreparedStatement is issued per matched row (or per excluded document).
         UUID documentId = UUID.randomUUID();
         insertChunk(documentId, "제품코드 ES-2024-A 는 물류 자동화 솔루션의 내부 관리 코드입니다.");
         AtomicInteger statementCount = new AtomicInteger();
+        JdbcTemplate countingJdbcTemplate = new JdbcTemplate(new CountingDataSource(dataSource, statementCount));
         ParadeDbBm25SearchAdapter countingAdapter =
                 new ParadeDbBm25SearchAdapter(
-                        new JdbcTemplate(new CountingDataSource(dataSource, statementCount)));
+                        countingJdbcTemplate, new NonIndexedDocumentLookup(countingJdbcTemplate));
 
         // when
         List<RetrievedChunk> result = countingAdapter.search("ES-2024-A", 20);
 
-        // then: exactly one JDBC statement was prepared for this call. The row-count/content
-        // assertions below are narrowed to this test's own document_id (Low item, review
-        // 2026-08-26 round-2 rework) -- this is a live, shared infra container, so "ES-2024-A"
-        // could in principle also match a row seeded by another concurrently-running test.
+        // then: exactly one JDBC PreparedStatement was prepared for this call (the main BM25
+        // query -- see [Caution] above for why the exclusion lookup does not add to this count).
+        // The row-count/content assertions below are narrowed to this test's own document_id (Low
+        // item, review 2026-08-26 round-2 rework) -- this is a live, shared infra container, so
+        // "ES-2024-A" could in principle also match a row seeded by another concurrently-running
+        // test.
         assertThat(statementCount.get()).isEqualTo(1);
         RetrievedChunk chunk = onlyChunkFor(result, documentId);
         assertThat(chunk.content()).contains("ES-2024-A");
@@ -272,6 +320,18 @@ class ParadeDbBm25SearchAdapterIntegrationTest extends IntegrationTestBase {
                         .toList();
         assertThat(matches).hasSize(1);
         return matches.get(0);
+    }
+
+    /**
+     * [Purpose] Inserts one {@code documents} row with the given {@code status} (T13/D-T10,
+     *   hybrid-rag:AC-15) -- a minimal row satisfying the table's {@code NOT NULL} columns
+     *   ({@code filename}, {@code status}), tracked for cleanup in {@link #cleanUpInsertedRows()}.
+     */
+    private void insertDocument(UUID id, String status) {
+        insertedDocumentTableIds.add(id);
+        jdbcTemplate.update(
+                "INSERT INTO documents (id, filename, status) VALUES (?, ?, ?)",
+                id, "ac15-test-" + id + ".txt", status);
     }
 
     private void insertChunk(UUID documentId, String content) {
