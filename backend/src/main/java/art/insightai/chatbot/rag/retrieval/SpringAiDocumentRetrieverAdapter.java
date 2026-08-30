@@ -32,16 +32,21 @@ import art.insightai.chatbot.rag.domain.RetrievedChunk;
  *   directly (2026-08-28 review Low-2): it is the only consumer of this metadata shape and reads
  *   exactly {@code document_id}/{@code filename}/{@code page}; {@code chunk_index} is
  *   ingest-only, and {@code dept}/{@code acl} are Phase-3 ACL-filtering placeholders with no
- *   reader anywhere yet. No production {@code documentFormatter}/{@code MetadataMode} in this
- *   codebase renders {@link Document} metadata into the prompt today ({@code
- *   RagAdvisorConfig}'s {@code ContextualQueryAugmenter} uses the library default formatter,
- *   which only reads {@code Document::getText}), so this whitelist has no observable effect yet
- *   -- it exists to keep {@code dept}/{@code acl} from becoming reachable by a one-line formatter
- *   change (2026-08-28 review Low-2) before Phase 3 actually needs them on this path. When Phase
- *   3 adds ACL filtering, this is the update point: either widen this whitelist to include {@code
- *   dept}/{@code acl} once a consumer reads them, or (preferably) push the ACL check into {@link
- *   HybridDocumentRetriever}'s pipeline instead, so unauthorized chunks never reach this adapter
- *   at all.
+ *   reader anywhere yet. (2026-08-30 T10 재작업 2라운드 correction, security Low-2 -- this paragraph
+ *   previously claimed "no custom {@code documentFormatter} exists, the library default is used";
+ *   that is no longer true as of this same card's own {@code hybrid-rag} Spec §8 R-H work.) A
+ *   custom {@code documentFormatter} does now exist -- {@link NonceBoundaryContextAugmenter}, wired
+ *   in by {@link RagAdvisorConfig#retrievalAugmentationAdvisor} -- but it still only ever calls
+ *   {@code document.getText()} on each {@link Document} it formats, never {@code
+ *   Document::getMetadata} or any {@code MetadataMode}-driven rendering (confirmed by reading that
+ *   class's own {@code formatDocuments} method directly), so this whitelist's invariant is
+ *   unchanged: {@code dept}/{@code acl} still have no path from this adapter's metadata map into
+ *   any rendered prompt. This exists to keep {@code dept}/{@code acl} from becoming reachable by a
+ *   one-line formatter change (2026-08-28 review Low-2) before Phase 3 actually needs them on this
+ *   path. When Phase 3 adds ACL filtering, this is the update point: either widen this whitelist to
+ *   include {@code dept}/{@code acl} once a consumer reads them, or (preferably) push the ACL check
+ *   into {@link HybridDocumentRetriever}'s pipeline instead, so unauthorized chunks never reach this
+ *   adapter at all.
  * [Caution] {@link Document}'s constructor/builder throws {@link IllegalArgumentException} on
  *   any null metadata *value* ({@code Assert.noNullElements(metadata.values(), ...)}, confirmed
  *   by reading {@code spring-ai-commons:2.0.1}'s {@code Document.java} directly -- the same

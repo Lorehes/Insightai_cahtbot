@@ -1,5 +1,6 @@
 package art.insightai.chatbot.chat.service;
 
+import art.insightai.chatbot.chat.domain.ChatChunk;
 import art.insightai.chatbot.chat.domain.Conversation;
 import art.insightai.chatbot.chat.domain.ConversationNotFoundException;
 import art.insightai.chatbot.chat.domain.ConversationQuotaExceededException;
@@ -15,14 +16,19 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
+
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
 /**
  * [Purpose] Business logic for conversation CRUD: creation, ownership-scoped listing, ownership
- *   guard, message history retrieval, and (T9) the two transactional persistence steps behind a
- *   sent message (chat Spec §5 A-11, T6, T9).
+ *   guard, message history retrieval, (T9) the two transactional persistence steps behind a
+ *   sent message, and (T11 rework round 1, maintainability Medium-1) parsing the persisted {@code
+ *   messages.sources} JSON column back into {@link ChatChunk.Source} for {@code
+ *   ConversationController#messages} (chat Spec §5 A-11, T6, T9, hybrid-rag:AC-12).
  * [Rationale] The ownership guard ({@link #requireOwnedConversation}) is concentrated here, not
  *   in {@code ConversationController}, so every endpoint that needs "does this conversation
  *   belong to the caller" (T6's messages list, T7's message send, T8's delete/ragEnabled update)
@@ -44,7 +50,13 @@ import java.util.UUID;
  *   silently run without a transaction. {@link #enforceMessageQuota} follows the exact same
  *   "count, then reject before the costly step" shape as {@link #createConversation}'s {@code
  *   max-conversations-per-user} check, one level down (T4/T6 precedent; T9 review, security
- *   Medium-3).
+ *   Medium-3). {@link #parseSources} (T11 rework round 1) moved here from {@code
+ *   ConversationController} — the read-side counterpart of {@code ChatService#serializeSources}
+ *   now lives on the Service layer next to the write side, instead of splitting {@code
+ *   messages.sources}'s parse/serialize policy across a Controller method and a Service method
+ *   (maintainability Medium-1: {@code ChatService}'s own class Javadoc already documents itself
+ *   as the sole originator of writes to {@code messages}; a Controller-level read of the same
+ *   column's JSON shape sat awkwardly next to that).
  * [Caution] {@link #createConversation}, {@link #listConversations} and {@link #getMessages} all
  *   take {@code userId} explicitly from the caller (the controller reads it from {@link
  *   art.insightai.chatbot.common.session.SessionContext} before calling in) rather than reaching
@@ -63,12 +75,20 @@ public class ConversationService {
     private final ConversationRepository conversationRepository;
     private final MessageRepository messageRepository;
     private final AppProperties appProperties;
+    private final ObjectMapper objectMapper;
 
+    /**
+     * [Purpose] {@code objectMapper} (T11 rework round 1, maintainability Medium-1) is Spring Boot 4's
+     *   autoconfigured {@code tools.jackson.databind.ObjectMapper} bean (Jackson 3) — {@link
+     *   #parseSources} uses it only to parse {@code messages.sources}, the read-side counterpart
+     *   of {@code ChatService}'s own use of the same bean type to serialize that column.
+     */
     public ConversationService(ConversationRepository conversationRepository,
-            MessageRepository messageRepository, AppProperties appProperties) {
+            MessageRepository messageRepository, AppProperties appProperties, ObjectMapper objectMapper) {
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
         this.appProperties = appProperties;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -140,6 +160,39 @@ public class ConversationService {
     public List<Message> getMessages(UUID conversationId, UUID userId) {
         requireOwnedConversation(conversationId, userId);
         return messageRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+    }
+
+    /**
+     * [Purpose] Parses {@code message.getSources()}'s stored JSON text back into the same {@link
+     *   ChatChunk.Source} list shape {@code ChatService} originally serialized (hybrid-rag:AC-12
+     *   read side) — the read-side counterpart of {@code ChatService#serializeSources}.
+     * [Rationale] Returns {@code null} (never {@code "[]"} nor throws) when {@code
+     *   message.getSources()} is {@code null} — true for every 'user' row (never has sources) and
+     *   for any 'assistant' row persisted before this feature's own write-side change, or one
+     *   whose stream terminated before a {@code sources} value was ever resolved (see {@code
+     *   ChatService#recordAssistantMessage}'s own [Rationale] for exactly when that holds) — this
+     *   mirrors the SSE wire's own null-when-absent convention for {@code sources} rather than
+     *   inventing a distinct "row predates this feature" signal. Moved to this class from {@code
+     *   ConversationController} (T11 rework round 1, maintainability Medium-1) — see this class's own
+     *   [Rationale] for why the {@code messages.sources} read/write policy belongs on the Service
+     *   layer, next to {@code ChatService}'s write side, rather than split across layers.
+     * [Caution] A parse failure (malformed stored JSON) is logged and falls back to {@code null}
+     *   rather than 500ing the whole history request (this project's established fallback
+     *   philosophy, D4/D5) — one corrupt row must not block a caller from reading every other
+     *   message in the conversation.
+     * [AC] hybrid-rag:AC-12
+     */
+    public List<ChatChunk.Source> parseSources(Message message) {
+        String sourcesJson = message.getSources();
+        if (sourcesJson == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(sourcesJson, new TypeReference<List<ChatChunk.Source>>() {});
+        } catch (RuntimeException e) {
+            log.warn("messages.sources JSON 파싱 실패, null 로 대체합니다 (messageId={})", message.getId(), e);
+            return null;
+        }
     }
 
     /**

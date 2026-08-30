@@ -10,6 +10,8 @@ import art.insightai.chatbot.chat.repository.MessageRepository;
 import art.insightai.chatbot.common.config.AppProperties;
 import art.insightai.chatbot.common.config.TestAppPropertiesFactory;
 
+import tools.jackson.databind.ObjectMapper;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -89,7 +91,11 @@ class ConversationServiceTest {
         // Mockito injects @Mock fields via reflection after construction but before each test
         // method, so `service` must be built here, not as an instance field initializer (which
         // would run during construction, before the mocks exist, and NPE on first use).
-        service = new ConversationService(conversationRepository, messageRepository, APP_PROPERTIES);
+        // ObjectMapper is a real instance -- none of this class's tests exercise
+        // ConversationService#parseSources (see ConversationServiceParseSourcesTest for that), so a
+        // mock would work just as well here, but a real one avoids a pointless unused-stub warning.
+        service = new ConversationService(
+                conversationRepository, messageRepository, APP_PROPERTIES, new ObjectMapper());
     }
 
     @Test

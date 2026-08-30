@@ -1,6 +1,10 @@
 package art.insightai.chatbot.chat.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -15,6 +19,8 @@ import art.insightai.chatbot.chat.domain.Message;
 import art.insightai.chatbot.chat.repository.ConversationRepository;
 import art.insightai.chatbot.chat.repository.MessageRepository;
 import art.insightai.chatbot.common.config.AppProperties;
+import art.insightai.chatbot.rag.domain.RetrievedChunk;
+import art.insightai.chatbot.rag.retrieval.HybridDocumentRetriever;
 import art.insightai.chatbot.support.CapturingStatementInspector;
 import art.insightai.chatbot.support.CapturingStatementInspectorConfig;
 import art.insightai.chatbot.support.IntegrationTestBase;
@@ -41,6 +47,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -289,6 +296,35 @@ import org.springframework.test.web.servlet.MvcResult;
  *   cannot detect a precision loss introduced at the JSON-encoding step — replaced with {@link
  *   #extractLastRawCostToken}, which slices the {@code "cost":} token directly out of the raw SSE
  *   response bytes before any JSON-to-Java-object parsing occurs.
+ * [BL-003 additions, dev-qa-tester 2026-08-30] Three tests were added for the finish-reason
+ *   case-folding fix (BL-003, 2026-08-30 user decision; the same-day routing decision keeps this
+ *   on the already-closed chat Spec's existing AC rather than opening a new one), but only one of
+ *   them is {@code chat:AC-28} end-to-end evidence: {@link
+ *   #sdkUppercaseFinishReasonIsLowercasedOnBothTheWireAndTheStoredRow} scripts a raw, unnormalized
+ *   SDK value through {@link StubChatModel#enqueueTokens} and asserts both the parsed SSE wire
+ *   chunk and the {@code messages.finish_reason} column read back from the DB. [BL-003 rework,
+ *   dev-qa-tester 2026-08-30, 2R Block review correctness Medium-3] The other two carry no {@code
+ *   chat:AC-28} tag and are not evidence for it: {@link
+ *   #sdkUnknownSentinelFinishReasonFoldsToUnknownOnBothTheWireAndTheStoredRow} scripts the literal
+ *   string {@code "_UNKNOWN"}, an input this pinned SDK version (spring-ai-openai 2.0.1) cannot
+ *   actually produce in production — {@code OpenAiChatModel.java:393-396} maps that case to {@code
+ *   null}, not the string (2026-08-30 review High-2, sources jar) — so it survives only as a
+ *   defensive regression guard for the same fold branch, not as AC-28 evidence. {@link
+ *   #sdkNeverSupplyingAFinishReasonStillPersistsUnknownButWireLastChunkIsNotAssertedNonNull}
+ *   deliberately asserts only the stored-row axis for the one scenario the fix's own author
+ *   documented as unguaranteed on the wire — see that test's own [DisplayName]. Neither test
+ *   closes the real production gap: the actual SDK {@code null} path (a mapped-but-unmappable
+ *   finish reason and a genuinely-absent one both arrive as {@code null}) still emits a wire last
+ *   chunk with {@code finishReason: null}. That gap is open, tracked as {@code BL-009}
+ *   (backlog.jsonl, 2026-08-30 user-approved scope reduction), and is not closed by any test in
+ *   this class.
+ * [T10 재작업 2라운드 additions, dev-qa-tester 2026-08-30, correctness Medium-1] {@link
+ *   #invokesRetrieverWhenRagIsEnabled} is the positive control for {@link
+ *   #neverInvokesRetrieverWhenRagIsDisabled} above -- see the {@link #hybridDocumentRetriever}
+ *   field's own Javadoc for why a bare {@code never()} on that field cannot alone rule out the
+ *   pair being unwired or disabled at the container level entirely, and see that field's
+ *   [Caution] for this class's corrected mock-safety invariant (the prior "every conversation
+ *   this class creates has ragEnabled=false" claim was already inaccurate before this addition).
  */
 @AutoConfigureMockMvc
 @TestPropertySource(properties = "app.session.max-anonymous-users=100000")
@@ -315,6 +351,43 @@ class ConversationControllerIntegrationTest extends IntegrationTestBase {
 
     @Autowired
     private CapturingStatementInspector capturingStatementInspector;
+
+    /**
+     * [Purpose] hybrid-rag Spec T10 (hybrid-rag:AC-10): replaces the real {@link
+     *   HybridDocumentRetriever} bean with a Mockito mock inside the actual Spring context, so
+     *   {@link #neverInvokesRetrieverWhenRagIsDisabled} can assert against a live {@code
+     *   POST /api/conversations/{id}/messages} call that the retriever is never reached end to
+     *   end -- {@code ChatServiceRagAttachmentTest#neverSearchesWhenRagIsDisabled} already proves
+     *   this at the unit level (a hand-built {@code ChatClient}), but only a real {@code
+     *   RetrievalAugmentationAdvisor} bean wired by Spring itself (autowired here through {@code
+     *   ChatService}'s constructor, not built by hand) closes the gap the Spec's own T10 hand-off
+     *   note calls out. {@link #invokesRetrieverWhenRagIsEnabled} is this test's positive control
+     *   (T10 재작업 2라운드, correctness Medium-1) -- it stubs this same mock to return one chunk
+     *   and asserts the retriever IS reached, so the {@code never()} assertion above cannot be
+     *   satisfied merely because the pair is unwired or disabled at the container level entirely.
+     * [Rationale] {@code @MockitoBean} (Spring Framework 7 / spring-test, superseding the
+     *   deprecated {@code @MockBean}) is used here rather than this codebase's more common {@code
+     *   @TestConfiguration}+{@code @Import} pattern ({@code StubChatModelConfig} and siblings,
+     *   which swap in a hand-written fake with real, scripted behavior) because this collaborator
+     *   needs neither: every assertion against it is either "was it called" ({@code never()}) or
+     *   "return this one canned chunk" ({@link #invokesRetrieverWhenRagIsEnabled}'s {@code
+     *   when(...).thenReturn(...)}), which is exactly what a Mockito mock is for -- writing a
+     *   dedicated fake class with no real logic to satisfy would only add indirection for no
+     *   behavioral gain (maintainability Medium-1, T10 재작업 2라운드).
+     * [Caution] This is a class-level {@code @MockitoBean}, replacing the bean for every test in
+     *   this class, not just the two above. The actual invariant that makes this safe is narrower
+     *   than "every conversation this class creates has {@code ragEnabled=false}" (that claim was
+     *   already false before this note -- e.g. {@link #createsConversationOwnedByCallingSessionUser}
+     *   asserts a {@code ragEnabled=true} response, it just never sends a message on that
+     *   conversation) -- the real invariant is: <b>every test in this class that sends a message</b>
+     *   (i.e. calls {@code POST .../messages}, the only path that can reach this bean) does so on a
+     *   conversation built with an explicit {@code ragEnabled=false} (see {@link #saveConversation}'s
+     *   call sites), with the single, deliberate exception of {@link
+     *   #invokesRetrieverWhenRagIsEnabled}, which uses {@code ragEnabled=true} on purpose and stubs
+     *   this mock explicitly rather than relying on it being unreached.
+     */
+    @MockitoBean
+    private HybridDocumentRetriever hybridDocumentRetriever;
 
     private final List<UUID> insertedConversationIds = new ArrayList<>();
     private final List<UUID> insertedUserIds = new ArrayList<>();
@@ -1155,6 +1228,97 @@ class ConversationControllerIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
+    @DisplayName("[chat:AC-28] 실물 SDK 대문자 종료 사유(STOP)가 와이어 마지막 청크와 messages."
+            + "finish_reason 저장 값 양쪽에서 소문자(stop)로 나타난다 (BL-003, 2026-08-30 user decision)")
+    void sdkUppercaseFinishReasonIsLowercasedOnBothTheWireAndTheStoredRow() throws Exception {
+        // given: StubChatModel.enqueueTokens forwards finishReason unchanged into
+        //   ChatGenerationMetadata, exactly the raw, un-normalized shape the real OpenAI Java SDK
+        //   reports via enum.name() (upper-case)
+        Session sessionA = establishSession();
+        Conversation conversation = saveConversation(sessionA.userId(), "upstage/solar-pro4", false);
+        stubChatModel.reset();
+        stubChatModel.enqueueTokens(
+                List.of("hello", " world"), "STOP", new StubChatModel.Usage(2, 2, BigDecimal.ZERO));
+
+        // when
+        MvcResult result = performMessageSendAndAwaitStream(sessionA, conversation.getId(), "hi");
+
+        // then: no non-terminal chunk carries finishReason, and the terminal one is lower-cased
+        List<Map<String, Object>> chunks = parseSseChunks(readBodyAsUtf8(result));
+        for (int i = 0; i < chunks.size() - 1; i++) {
+            assertThat(chunks.get(i).get("finishReason")).isNull();
+        }
+        assertThat(chunks.get(chunks.size() - 1).get("finishReason")).isEqualTo("stop");
+
+        // then: the persisted assistant row's finish_reason column is the same lower-cased value,
+        //   not the raw "STOP" the stub was scripted with
+        List<Map<String, Object>> messageRows = fetchMessageRows(conversation.getId());
+        Map<String, Object> assistantRow = messageRows.get(1);
+        assertThat(assistantRow.get("finish_reason")).isEqualTo("stop");
+    }
+
+    @Test
+    @DisplayName("(무태그 -- 방어적 회귀 가드, 대응 AC 없음) 상위 라이브러리가 매핑 불가 값을 문자열 "
+            + "\"_UNKNOWN\" 으로 넘기는 경우, 와이어 마지막 청크와 messages.finish_reason 저장 값 양쪽에서 "
+            + "unknown 으로 나타난다 -- 이 SDK 버전(spring-ai-openai 2.0.1)의 실물 경로는 이 값을 null 로 "
+            + "반환하므로 (2026-08-30 review High-2, OpenAiChatModel.java:393-396) 이 테스트는 chat:AC-28 이 "
+            + "실물에서 깨지는 시나리오를 검증하지 않는다. 방어적 fold 분기를 지키는 회귀 가드로만 유지한다")
+    void sdkUnknownSentinelFinishReasonFoldsToUnknownOnBothTheWireAndTheStoredRow() throws Exception {
+        // given: a hypothetical literal string a future SDK version or different provider adapter
+        //   might pass through instead of null -- ChatService#toChunk's normalizeFinishReason call
+        //   would fold it immediately if the SDK ever supplied it this way (distinct from the "SDK
+        //   supplied nothing at all" scenario below)
+        Session sessionA = establishSession();
+        Conversation conversation = saveConversation(sessionA.userId(), "upstage/solar-pro4", false);
+        stubChatModel.reset();
+        stubChatModel.enqueueTokens(
+                List.of("hello", " world"), "_UNKNOWN", new StubChatModel.Usage(2, 2, BigDecimal.ZERO));
+
+        // when
+        MvcResult result = performMessageSendAndAwaitStream(sessionA, conversation.getId(), "hi");
+
+        // then
+        List<Map<String, Object>> chunks = parseSseChunks(readBodyAsUtf8(result));
+        for (int i = 0; i < chunks.size() - 1; i++) {
+            assertThat(chunks.get(i).get("finishReason")).isNull();
+        }
+        assertThat(chunks.get(chunks.size() - 1).get("finishReason")).isEqualTo("unknown");
+
+        List<Map<String, Object>> messageRows = fetchMessageRows(conversation.getId());
+        Map<String, Object> assistantRow = messageRows.get(1);
+        assertThat(assistantRow.get("finish_reason")).isEqualTo("unknown");
+    }
+
+    @Test
+    @DisplayName("(무태그 -- 대응 AC 없음, BL-003 한계 문서화) SDK 가 스트림 내내 finishReason 을 한 번도 "
+            + "주지 않으면 messages.finish_reason 저장 값은 unknown 으로 확정된다. 이 시나리오의 와이어 "
+            + "마지막 청크가 non-null 이라고는 단언하지 않는다 -- ChatService#toChunk 는 이 경우 "
+            + "finishReasonHolder 를 한 번도 채우지 않으므로 방출된 마지막 청크 자체는 여전히 null 일 수 "
+            + "있고, onStreamTerminated 의 unknown 폴백은 저장 시점에만 적용되지 이미 나간 와이어 청크를 "
+            + "다시 쓰지 않는다 (구현자가 명시한 한계, 지시문 \"이것을 단언하는 테스트는 쓰지 마라\")")
+    void sdkNeverSupplyingAFinishReasonStillPersistsUnknownButWireLastChunkIsNotAssertedNonNull() throws Exception {
+        // given: no finish reason on any scripted response, including the terminal one
+        Session sessionA = establishSession();
+        Conversation conversation = saveConversation(sessionA.userId(), "upstage/solar-pro4", false);
+        stubChatModel.reset();
+        stubChatModel.enqueueTokens(
+                List.of("hello", " world"), null, new StubChatModel.Usage(2, 2, BigDecimal.ZERO));
+
+        // when
+        MvcResult result = performMessageSendAndAwaitStream(sessionA, conversation.getId(), "hi");
+
+        // then: deliberately no assertion on the wire's last chunk finishReason -- see this test's
+        //   own [DisplayName] for why that axis is not guaranteed in this scenario
+        List<Map<String, Object>> chunks = parseSseChunks(readBodyAsUtf8(result));
+        assertThat(chunks).isNotEmpty();
+
+        // then: the persisted row is the one axis BL-003 actually guarantees for this scenario
+        List<Map<String, Object>> messageRows = fetchMessageRows(conversation.getId());
+        Map<String, Object> assistantRow = messageRows.get(1);
+        assertThat(assistantRow.get("finish_reason")).isEqualTo("unknown");
+    }
+
+    @Test
     @DisplayName("[chat:AC-29] 요청 1건 처리 후 messages 에 user 1행과 assistant 1행이 생기고 "
             + "assistant content 가 스트리밍된 delta 를 이어붙인 문자열과 같다")
     void persistsExactlyOneUserAndOneAssistantRowMatchingStreamedContent() throws Exception {
@@ -1556,6 +1720,201 @@ class ConversationControllerIntegrationTest extends IntegrationTestBase {
         assertThat(assistantRow.get("role")).isEqualTo("assistant");
         assertThat(assistantRow.get("content")).isEqualTo("일부 답");
         assertThat(assistantRow.get("finish_reason")).isEqualTo("error");
+    }
+
+    @Test
+    @DisplayName("[hybrid-rag:AC-10][hybrid-rag:AC-12] rag_enabled=false인 대화에 실제 POST .../messages 를 "
+            + "호출하면 검색이 한 번도 실행되지 않고 응답에는 일반 답변만 담기며, sources 는 SSE 마지막 청크와 "
+            + "대화 이력 재조회 양쪽 모두 빈 배열이다 (null 아님)")
+    void neverInvokesRetrieverWhenRagIsDisabled() throws Exception {
+        // given: ragEnabled is set explicitly to false, never left at a default -- Spec's own T10
+        //   hand-off note (Tech Review, 2026-08-28) warns that AC-10's text only specifies the
+        //   false-branch behavior, not the default, so a fixture relying on a default would prove
+        //   nothing once Conversation's/ConversationService's own default ever changes again (it
+        //   already flipped once -- chat Spec D-1, 2026-08-28)
+        Session sessionA = establishSession();
+        Conversation conversation = saveConversation(sessionA.userId(), "upstage/solar-pro4", false);
+        stubChatModel.reset();
+        stubChatModel.enqueueTokens(
+                List.of("네, ", "도와드릴게요"), "stop", new StubChatModel.Usage(4, 3, BigDecimal.ZERO));
+
+        // when: a real HTTP call through the full filter chain + real Spring-wired ChatService,
+        //   whose two RAG advisor beans are genuinely autowired by the container (not hand-built,
+        //   unlike ChatServiceRagAttachmentTest) -- only this shape can prove the container-level
+        //   wiring itself never reaches the retriever, closing the gap that unit test's own
+        //   Javadoc [Purpose] explicitly leaves open
+        MvcResult result = performMessageSendAndAwaitStream(sessionA, conversation.getId(), "오늘 날씨 어때?");
+
+        // then: the retriever behind the (really-attached-elsewhere, but not for this
+        //   conversation) advisor pair was never reached
+        verify(hybridDocumentRetriever, never()).retrieve(anyString());
+
+        // then: the plain model answer streamed through untouched -- no AC-5 "모른다"
+        //   short-circuit, which only ever fires when the guard advisor is actually attached
+        List<Map<String, Object>> chunks = parseSseChunks(readBodyAsUtf8(result));
+        assertThat(concatenateDeltas(chunks)).isEqualTo("네, 도와드릴게요");
+
+        // then: [hybrid-rag:AC-10 절②] the terminal chunk carries a non-null, explicitly empty
+        //   sources array -- rag_enabled=false must never leave sources absent (null).
+        //   ChatServiceRagAttachmentTest#neverSearchesWhenRagIsDisabled already proves this at the
+        //   unit level (a hand-built ChatClient); this is the real, Spring-wired confirmation.
+        assertThat(chunks.get(chunks.size() - 1).get("sources")).isEqualTo(List.of());
+
+        // then: [hybrid-rag:AC-12] a history replay over a separate GET call returns the same
+        //   empty array -- not null, and not merely what the SSE wire happened to carry
+        MvcResult historyResult = mockMvc.perform(get("/api/conversations/{id}/messages", conversation.getId())
+                        .cookie(new Cookie("chatbot_sid", sessionA.cookieValue())))
+                .andExpect(status().isOk())
+                .andReturn();
+        List<Map<String, Object>> historyMessages =
+                JsonPath.read(historyResult.getResponse().getContentAsString(), "$");
+        Map<String, Object> assistantRow = historyMessages.stream()
+                .filter(entry -> "assistant".equals(entry.get("role")))
+                .findFirst()
+                .orElseThrow();
+        assertThat(assistantRow.get("sources")).isEqualTo(List.of());
+    }
+
+    @Test
+    @DisplayName("(무태그 -- 양성 대조, T10 재작업 2라운드 correctness Medium-1 신설. AC-10 원문은 "
+            + "rag_enabled=false 케이스만 다루므로 이 rag_enabled=true 대조군은 그 AC의 증거로 태그하지 않는다, "
+            + "QA 재작업 2라운드 correctness Medium-4) rag_enabled=true인 대화에 실제 POST .../messages 를 "
+            + "호출하면 검색이 실제로 실행된다")
+    void invokesRetrieverWhenRagIsEnabled() throws Exception {
+        // given: ragEnabled is set explicitly to true, the mirror-image fixture of
+        //   neverInvokesRetrieverWhenRagIsDisabled above -- a bare never() there cannot by itself
+        //   distinguish "not attached for this one conversation" from "the advisor pair is not
+        //   wired into the container at all / disabled entirely", so this positive control proves
+        //   the same real, Spring-wired advisor pair actually reaches the retriever when RAG is on
+        Session sessionA = establishSession();
+        Conversation conversation = saveConversation(sessionA.userId(), "upstage/solar-pro4", true);
+        stubChatModel.reset();
+        stubChatModel.enqueueTokens(
+                List.of("네, ", "오늘 회식 있습니다"), "stop", new StubChatModel.Usage(4, 3, BigDecimal.ZERO));
+        // [QA 재작업 2라운드 correctness Medium-4] document_id/filename must be present and valid --
+        //   an empty Map.of() here made SourceRefMapper throw and silently exercised
+        //   ChatService#resolveSources' error-fallback branch (ERROR log + empty sources) on every
+        //   run instead of the intended happy path this positive control claims to cover.
+        UUID documentId = UUID.randomUUID();
+        when(hybridDocumentRetriever.retrieve(anyString()))
+                .thenReturn(List.of(new RetrievedChunk("chunk-1", "회식은 8월 30일 오후 7시입니다.",
+                        Map.of("document_id", documentId.toString(), "filename", "회식공지.pdf"), 0.9)));
+
+        // when: a real HTTP call through the full filter chain + the real Spring-wired
+        //   ChatService -- same shape as neverInvokesRetrieverWhenRagIsDisabled, only ragEnabled
+        //   and the mock's stubbed return value differ
+        MvcResult result = performMessageSendAndAwaitStream(sessionA, conversation.getId(), "오늘 회식 있어?");
+
+        // then: the retriever behind the actually-attached advisor pair was reached -- this is
+        //   the first end-to-end, container-level evidence that the pair is genuinely wired for a
+        //   ragEnabled=true conversation, not merely "not disabled" by omission
+        verify(hybridDocumentRetriever).retrieve(anyString());
+
+        // then: the plain model answer streamed through untouched -- no AC-5 "모른다"
+        //   short-circuit, since the mocked retriever returned a non-empty result
+        List<Map<String, Object>> chunks = parseSseChunks(readBodyAsUtf8(result));
+        assertThat(concatenateDeltas(chunks)).isEqualTo("네, 오늘 회식 있습니다");
+    }
+
+    /**
+     * [Purpose] hybrid-rag:AC-12's own "대화 이력 재조회에서 같은 값이 반환된다" clause, end to end
+     *   through the real DB -- no existing test in this class or {@code ChatServiceRagAttachmentTest}
+     *   (unit-level only, no HTTP re-fetch) exercises the actual {@code GET
+     *   /api/conversations/{id}/messages} round trip after a RAG turn that found a real document.
+     * [Rationale] Reuses {@code ChatServiceRagAttachmentTest
+     *   #populatesSourcesOnTheLastChunkAndPersistsTheIdenticalJsonWhenDocumentsAreFound}'s fixture
+     *   shape (one {@link RetrievedChunk} carrying every {@code SourceRefMapper}-required metadata
+     *   key) but drives it through a real {@code POST .../messages} call followed by a real,
+     *   separate {@code GET .../messages} call -- the only way to prove {@code
+     *   ConversationService#parseSources} (BL-008; moved here from {@code ConversationController}
+     *   T11 재작업 1회차, maintainability Medium-1) actually reconstructs the same value {@code
+     *   ChatService#serializeSources} wrote, rather than each side being unit-tested against its own
+     *   assumption of what the other produces.
+     */
+    @Test
+    @DisplayName("[hybrid-rag:AC-12] RAG 응답이 실제 문서를 찾아 저장된 뒤 대화 이력을 재조회하면 SSE 마지막 "
+            + "청크와 정확히 동일한 sources 가 반환된다")
+    void reconfirmsIdenticalSourcesOnHistoryReplayWhenDocumentsAreFound() throws Exception {
+        // given: a real document is found by the (mocked) retriever, with every SourceRefMapper-
+        //   required metadata key present
+        Session sessionA = establishSession();
+        Conversation conversation = saveConversation(sessionA.userId(), "upstage/solar-pro4", true);
+        stubChatModel.reset();
+        stubChatModel.enqueueTokens(
+                List.of("연차는 ", "15일입니다"), "stop", new StubChatModel.Usage(10, 5, BigDecimal.ZERO));
+        UUID documentId = UUID.randomUUID();
+        when(hybridDocumentRetriever.retrieve(anyString())).thenReturn(List.of(new RetrievedChunk(
+                "chunk-1", "이 문서는 2024년 휴가 정책을 설명합니다",
+                Map.of("document_id", documentId.toString(), "filename", "휴가정책.pdf", "page", 3), 0.42)));
+
+        // when: the message is sent and its SSE stream fully read
+        MvcResult sendResult = performMessageSendAndAwaitStream(sessionA, conversation.getId(), "휴가는 며칠이야?");
+        List<Map<String, Object>> chunks = parseSseChunks(readBodyAsUtf8(sendResult));
+        Object sseSources = chunks.get(chunks.size() - 1).get("sources");
+
+        // then: the SSE terminal chunk actually carried a non-empty sources list -- guards against
+        //   the reconfirm assertion below trivially passing on two independently-empty values if
+        //   resolveSources ever silently regressed to always-empty
+        assertThat((List<?>) sseSources).isNotEmpty();
+
+        // when: the conversation's history is re-fetched over a separate GET call
+        MvcResult historyResult = mockMvc.perform(get("/api/conversations/{id}/messages", conversation.getId())
+                        .cookie(new Cookie("chatbot_sid", sessionA.cookieValue())))
+                .andExpect(status().isOk())
+                .andReturn();
+        List<Map<String, Object>> historyMessages =
+                JsonPath.read(historyResult.getResponse().getContentAsString(), "$");
+        Map<String, Object> assistantRow = historyMessages.stream()
+                .filter(entry -> "assistant".equals(entry.get("role")))
+                .findFirst()
+                .orElseThrow();
+
+        // then: AC-12's own text -- the history replay's sources is exactly the same value the SSE
+        //   stream's terminal chunk carried, not a second, independently re-derived value
+        assertThat(assistantRow.get("sources")).isEqualTo(sseSources);
+    }
+
+    /**
+     * [Purpose] hybrid-rag:AC-12's "검색 0건" case -- the other half of the card brief's explicit
+     *   ask, alongside {@link #neverInvokesRetrieverWhenRagIsDisabled}'s rag-disabled case above.
+     * [Rationale] {@code ragEnabled=true} but the retriever legitimately finds nothing funnels into
+     *   {@code RagEmptyContextGuardAdvisor}'s fixed "모른다" answer (hybrid-rag:AC-5), already
+     *   proven at the unit level by {@code ChatServiceRagAttachmentTest
+     *   #emitsEmptySourcesWhenZeroDocumentsPassTheThreshold} -- this test's own, narrower concern is
+     *   only the AC-12 history-replay clause on top of that (empty array, not null, survives a real
+     *   GET round trip too).
+     */
+    @Test
+    @DisplayName("[hybrid-rag:AC-12] rag_enabled=true 인 대화에서 검색 결과가 0건이면 SSE 마지막 청크와 대화 "
+            + "이력 재조회 양쪽 모두 sources 가 빈 배열이다 (null 아님)")
+    void reconfirmsEmptySourcesOnHistoryReplayWhenSearchFindsNothing() throws Exception {
+        // given: ragEnabled=true but the (mocked) retriever legitimately finds nothing
+        Session sessionA = establishSession();
+        Conversation conversation = saveConversation(sessionA.userId(), "upstage/solar-pro4", true);
+        stubChatModel.reset();
+        // no answer-generation script enqueued -- the guard must short-circuit before the model is
+        // ever called, exactly as the unit-level equivalent test documents
+        when(hybridDocumentRetriever.retrieve(anyString())).thenReturn(List.of());
+
+        // when
+        MvcResult sendResult = performMessageSendAndAwaitStream(sessionA, conversation.getId(), "회사 워크숍은 언제야?");
+        List<Map<String, Object>> chunks = parseSseChunks(readBodyAsUtf8(sendResult));
+        assertThat(chunks.get(chunks.size() - 1).get("sources")).isEqualTo(List.of());
+
+        // when: history replay over a separate GET call
+        MvcResult historyResult = mockMvc.perform(get("/api/conversations/{id}/messages", conversation.getId())
+                        .cookie(new Cookie("chatbot_sid", sessionA.cookieValue())))
+                .andExpect(status().isOk())
+                .andReturn();
+        List<Map<String, Object>> historyMessages =
+                JsonPath.read(historyResult.getResponse().getContentAsString(), "$");
+        Map<String, Object> assistantRow = historyMessages.stream()
+                .filter(entry -> "assistant".equals(entry.get("role")))
+                .findFirst()
+                .orElseThrow();
+
+        // then: exactly [] on replay too, not null
+        assertThat(assistantRow.get("sources")).isEqualTo(List.of());
     }
 
     /**

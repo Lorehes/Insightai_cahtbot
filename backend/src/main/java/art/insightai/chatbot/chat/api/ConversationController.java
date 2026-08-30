@@ -105,13 +105,23 @@ public class ConversationController {
      * [Purpose] Returns {@code id}'s messages in {@code created_at} ascending order. 404s (via
      *   {@code GlobalExceptionHandler}) when {@code id} does not exist, belongs to another
      *   session, or is soft-deleted.
-     * [AC] chat:AC-15
+     * [Rationale] {@code MessageResponse::from} (chat T6-T9) could not survive hybrid-rag T11's
+     *   BL-008 addition unchanged: parsing {@link Message#getSources()} needs a JSON codec, which
+     *   a {@code static} record factory taking only a {@link Message} cannot reach — so this
+     *   method now builds each {@link MessageResponse} itself, delegating the actual parsing to
+     *   {@link ConversationService#parseSources} (T11 rework round 1, maintainability Medium-1: {@code
+     *   messages.sources}'s read/write policy is concentrated on the Service layer — {@code
+     *   ChatService} already owns the write side via {@code serializeSources}/{@code
+     *   resolveSources} — rather than split across a Controller method and a Service method).
+     *   This controller method itself performs no parsing or JSON handling of any kind.
+     * [AC] chat:AC-15, hybrid-rag:AC-12
      */
     @GetMapping("/{id}/messages")
     public List<MessageResponse> messages(@PathVariable UUID id) {
         UUID userId = sessionContext.currentUserId();
         return conversationService.getMessages(id, userId).stream()
-                .map(MessageResponse::from)
+                .map(message -> new MessageResponse(message.getRole(), message.getContent(),
+                        message.getCreatedAt(), conversationService.parseSources(message)))
                 .toList();
     }
 
@@ -352,10 +362,16 @@ public class ConversationController {
         }
     }
 
-    /** [Purpose] One entry of {@code GET /api/conversations/{id}/messages} (chat Spec §5 A-11). */
-    public record MessageResponse(String role, String content, OffsetDateTime createdAt) {
-        static MessageResponse from(Message message) {
-            return new MessageResponse(message.getRole(), message.getContent(), message.getCreatedAt());
-        }
+    /**
+     * [Purpose] One entry of {@code GET /api/conversations/{id}/messages} (chat Spec §5 A-11).
+     * [Rationale] {@code sources} (hybrid-rag T11, BL-008 — AC-12 read side) reuses {@link
+     *   ChatChunk.Source} verbatim rather than a second, near-identical DTO — the same shape
+     *   {@code ChatService} streams on the SSE wire's terminal chunk is what this endpoint's
+     *   history replay returns for an 'assistant' row, so one shared type keeps both call sites
+     *   from drifting apart field-by-field over time (project rule: shared types live in one place
+     *   and are reused, not duplicated).
+     */
+    public record MessageResponse(String role, String content, OffsetDateTime createdAt,
+            List<ChatChunk.Source> sources) {
     }
 }

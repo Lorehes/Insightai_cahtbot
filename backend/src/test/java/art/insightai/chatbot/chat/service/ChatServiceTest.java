@@ -7,11 +7,16 @@ import art.insightai.chatbot.chat.domain.MessageQuotaExceededException;
 import art.insightai.chatbot.chat.repository.MessageChatMemoryRepository;
 import art.insightai.chatbot.common.config.AppProperties;
 import art.insightai.chatbot.common.config.TestAppPropertiesFactory;
+import art.insightai.chatbot.rag.retrieval.RagAdvisorPair;
+import art.insightai.chatbot.rag.retrieval.RagEmptyContextGuardAdvisor;
+import art.insightai.chatbot.rag.retrieval.SourceRefMapper;
 import art.insightai.chatbot.support.StubChatModel;
 
 import com.fasterxml.jackson.databind.node.DoubleNode;
 import com.openai.core.JsonValue;
 import com.openai.models.completions.CompletionUsage;
+
+import tools.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -30,6 +35,7 @@ import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
 
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
@@ -54,6 +60,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -180,6 +187,30 @@ import static org.mockito.Mockito.when;
  *   describes, rather than checking the "response == DB" claim itself. New local helper {@link
  *   #scriptedResponsesWithZeroUsageDelta} mirrors {@link #scriptedResponsesWithUsage} but injects
  *   the zeroed shape on one non-terminal chunk instead of the terminal one.
+ * [BL-003 additions, dev-qa-tester 2026-08-30] Three tests were added for the finish-reason
+ *   case-folding fix (BL-003, 2026-08-30 user decision; routing decision same day keeps this on
+ *   the already-closed chat Spec's existing {@code chat:AC-28} rather than a new AC), but only one
+ *   of them is {@code chat:AC-28} evidence: {@link
+ *   #sdkUppercaseFinishReasonIsLowercasedOnBothTheLastChunkAndThePersistedRow} scripts a raw,
+ *   unnormalized SDK value ({@link #scriptedResponses} passes {@code finishReason} straight
+ *   through to {@code ChatGenerationMetadata}, exactly as {@code toChunk} receives it in
+ *   production) and asserts both the wire's last chunk and the {@link Message} passed to {@code
+ *   persistAssistantTurn}. [BL-003 rework, dev-qa-tester 2026-08-30, 2R Block review
+ *   correctness Medium-3] The other two carry no {@code chat:AC-28} tag and are not evidence for
+ *   it: {@link #sdkUnknownSentinelFinishReasonFoldsToUnknownOnBothTheLastChunkAndThePersistedRow}
+ *   scripts the literal string {@code "_UNKNOWN"}, an input this pinned SDK version
+ *   (spring-ai-openai 2.0.1) cannot actually produce in production — {@code
+ *   OpenAiChatModel.java:393-396} maps that case to {@code null}, not the string (2026-08-30 review
+ *   High-2, sources jar) — so it survives only as a defensive regression guard for {@code
+ *   normalizeFinishReason}'s {@code "_unknown"} string-match branch, not as AC-28 evidence. {@link
+ *   #sdkNeverSupplyingAFinishReasonStillPersistsUnknownButWireLastChunkIsNotAssertedNonNull}
+ *   deliberately asserts only the persisted-row axis for the one scenario the fix's own author
+ *   documented as unguaranteed on the wire (a still-{@code null} {@code finishReasonHolder} at
+ *   stream end) — see that test's own [DisplayName] for the full reasoning. Neither test closes
+ *   the real production gap: the actual SDK {@code null} path (a mapped-but-unmappable finish
+ *   reason and a genuinely-absent one both arrive as {@code null}) still emits a wire last chunk
+ *   with {@code finishReason: null}. That gap is open, tracked as {@code BL-009} (backlog.jsonl,
+ *   2026-08-30 user-approved scope reduction), and is not closed by any test in this class.
  */
 @ExtendWith(MockitoExtension.class)
 class ChatServiceTest {
@@ -205,6 +236,35 @@ class ChatServiceTest {
     @Mock
     private MessageChatMemoryRepository chatMemoryRepository;
 
+    // [T10, dev-backend-engineer 2026-08-30] One more constructor param (hybrid-rag T10:
+    // RagAdvisorPair, T10 재작업 1라운드 security Medium-2: bundled from two separate advisor params
+    // into one List<Advisor>; T10 재작업 2라운드 security Medium-2: that List<Advisor> replaced by
+    // this dedicated record type -- see RagAdvisorPair's own Javadoc for why): every test in this
+    // class leaves conversationStub()'s isRagEnabled() at Mockito's boolean default (false), so
+    // streamReply() never calls .advisors(...) on these -- they are passed only to satisfy the
+    // constructor signature and are never stubbed/verified here. The conditional attachment itself
+    // (ragEnabled=true branch) is ChatServiceRagAttachmentTest's scope, which builds a real
+    // ChatClient/RagAdvisorConfig stack instead of this class's mocked fluent chain.
+    @Mock
+    private RetrievalAugmentationAdvisor retrievalAugmentationAdvisor;
+
+    @Mock
+    private RagEmptyContextGuardAdvisor ragEmptyContextGuardAdvisor;
+
+    // [hybrid-rag T11, dev-backend-engineer 2026-08-30] Two more constructor params. sourceRefMapper
+    // is a plain Mockito mock, never stubbed/verified: every test in this class leaves
+    // conversationStub()'s isRagEnabled() at Mockito's boolean default (false), so
+    // ChatService#resolveSources short-circuits to List.of() before ever touching this collaborator
+    // (see that method's own [Rationale]) -- the ragEnabled=true path, where it actually matters, is
+    // ChatServiceRagAttachmentTest's scope. objectMapper is a REAL tools.jackson.databind.ObjectMapper
+    // (Jackson 3), not a mock -- persistsEmptyArrayJsonForSourcesWhenRagIsDisabled below asserts the
+    // actual "[]" JSON text ChatService#serializeSources produces, which a mocked ObjectMapper
+    // (returning null by default for an unstubbed call) could not exercise.
+    @Mock
+    private SourceRefMapper sourceRefMapper;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     private ChatService service;
 
     @BeforeEach
@@ -226,7 +286,9 @@ class ChatServiceTest {
         lenient().when(chatMemoryRepository.findByConversationId(anyString())).thenReturn(List.of());
 
         service = new ChatService(chatClientBuilder, conversationService, chatMemoryRepository,
-                TestAppPropertiesFactory.valid());
+                TestAppPropertiesFactory.valid(),
+                new RagAdvisorPair(retrievalAugmentationAdvisor, ragEmptyContextGuardAdvisor),
+                sourceRefMapper, objectMapper);
     }
 
     @Test
@@ -249,7 +311,9 @@ class ChatServiceTest {
                 new UserMessage("2번째 질문")));
         ChatService serviceUnderTest = new ChatService(
                 ChatClient.builder(stubChatModel), conversationService, chatMemoryRepository,
-                TestAppPropertiesFactory.valid());
+                TestAppPropertiesFactory.valid(),
+                new RagAdvisorPair(retrievalAugmentationAdvisor, ragEmptyContextGuardAdvisor),
+                sourceRefMapper, objectMapper);
         Conversation conversation = conversationStub();
 
         // when
@@ -319,6 +383,134 @@ class ChatServiceTest {
             assertThat(chunks.get(i).finishReason()).isNull();
         }
         assertThat(chunks.get(chunks.size() - 1).finishReason()).isEqualTo("stop");
+    }
+
+    @Test
+    @DisplayName("[hybrid-rag:AC-10] rag_enabled=false 인 대화에서는 스트림의 마지막 청크만 sources 를 "
+            + "채우고(빈 배열) 그 앞의 모든 청크는 sources 가 null 이다")
+    void onlyTheLastChunkCarriesSourcesWhenRagIsDisabled() {
+        // given: conversationStub() leaves isRagEnabled() at Mockito's boolean default (false)
+        when(streamResponseSpec.chatResponse()).thenReturn(scriptedResponses(List.of("hello", " world"), "stop"));
+        Conversation conversation = conversationStub();
+
+        // when
+        List<ChatChunk> chunks = service.streamReply(conversation, null, "hi").collectList().block();
+
+        // then: every non-terminal chunk carries sources == null, exactly like usage/finishReason
+        for (int i = 0; i < chunks.size() - 1; i++) {
+            assertThat(chunks.get(i).sources()).isNull();
+        }
+
+        // then: the terminal chunk carries a non-null, explicitly empty array -- never null,
+        //   since rag_enabled=false always resolves to List.of() (ChatService#resolveSources)
+        assertThat(chunks.get(chunks.size() - 1).sources()).isEqualTo(List.of());
+
+        // then: sourceRefMapper is never reached -- resolveSources short-circuits before it
+        verifyNoInteractions(sourceRefMapper);
+    }
+
+    @Test
+    @DisplayName("[hybrid-rag:AC-12] rag_enabled=false 인 대화의 assistant 행에는 sources 로 빈 배열의 "
+            + "JSON(\"[]\")이 저장되고, 이는 마지막 청크가 방출한 값과 동일하다")
+    void persistsEmptyArrayJsonForSourcesWhenRagIsDisabled() {
+        // given
+        when(streamResponseSpec.chatResponse()).thenReturn(scriptedResponses(List.of("ok"), "stop"));
+        Conversation conversation = conversationStub();
+
+        // when
+        List<ChatChunk> chunks = service.streamReply(conversation, null, "hi").collectList().block();
+
+        // then: the wire's last chunk carries an explicit empty array
+        assertThat(chunks.get(chunks.size() - 1).sources()).isEqualTo(List.of());
+
+        // then: the persisted assistant row stores the identical value, serialized as "[]" -- not
+        //   null, and not skipped just because the list happens to be empty
+        ArgumentCaptor<Message> assistantMessageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(conversationService).persistAssistantTurn(assistantMessageCaptor.capture());
+        assertThat(assistantMessageCaptor.getValue().getSources()).isEqualTo("[]");
+    }
+
+    @Test
+    @DisplayName("[chat:AC-28] SDK 가 대문자 종료 사유(STOP)를 보내도 마지막 청크와 저장되는 assistant 행 "
+            + "모두 소문자(stop)로 나타나고, 중간 청크는 여전히 null 이다 (BL-003, 2026-08-30 user decision)")
+    void sdkUppercaseFinishReasonIsLowercasedOnBothTheLastChunkAndThePersistedRow() {
+        // given: StubChatModel-shaped script carrying the raw, unnormalized SDK value -- real
+        //   OpenAI/OpenRouter streams report finish reasons via enum.name(), i.e. upper-case
+        when(streamResponseSpec.chatResponse())
+                .thenReturn(scriptedResponses(List.of("hello", " world"), "STOP"));
+        Conversation conversation = conversationStub();
+
+        // when
+        List<ChatChunk> chunks = service.streamReply(conversation, null, "hi").collectList().block();
+
+        // then: chat:AC-28's "only the last chunk carries finishReason" still holds with a raw
+        //   upper-case SDK value in the mix
+        for (int i = 0; i < chunks.size() - 1; i++) {
+            assertThat(chunks.get(i).finishReason()).isNull();
+        }
+        assertThat(chunks.get(chunks.size() - 1).finishReason()).isEqualTo("stop");
+
+        // then: the value ChatService would persist (Message passed to persistAssistantTurn) is
+        //   the same lower-cased form, not the raw "STOP"
+        ArgumentCaptor<Message> assistantMessageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(conversationService).persistAssistantTurn(assistantMessageCaptor.capture());
+        assertThat(assistantMessageCaptor.getValue().getFinishReason()).isEqualTo("stop");
+    }
+
+    @Test
+    @DisplayName("(무태그 -- 방어적 회귀 가드, 대응 AC 없음) 상위 라이브러리가 매핑 불가 값을 문자열 "
+            + "\"_UNKNOWN\" 으로 넘기는 경우, 마지막 청크와 저장되는 assistant 행 모두 unknown 으로 나타난다 "
+            + "-- 이 SDK 버전(spring-ai-openai 2.0.1)의 실물 경로는 이 값을 null 로 반환하므로 (2026-08-30 "
+            + "review High-2, OpenAiChatModel.java:393-396) 이 테스트는 chat:AC-28 이 실물에서 깨지는 시나리오를 "
+            + "검증하지 않는다. 방어적 fold 분기(normalizeFinishReason 의 \"_unknown\" 문자열 매칭)를 지키는 "
+            + "회귀 가드로만 유지한다")
+    void sdkUnknownSentinelFinishReasonFoldsToUnknownOnBothTheLastChunkAndThePersistedRow() {
+        // given: a hypothetical literal string a future SDK version or different provider adapter
+        //   might pass through instead of null -- this project's pinned SDK version does not
+        //   reach this branch in production (see normalizeFinishReason's own Javadoc)
+        when(streamResponseSpec.chatResponse())
+                .thenReturn(scriptedResponses(List.of("hello", " world"), "_UNKNOWN"));
+        Conversation conversation = conversationStub();
+
+        // when
+        List<ChatChunk> chunks = service.streamReply(conversation, null, "hi").collectList().block();
+
+        // then
+        for (int i = 0; i < chunks.size() - 1; i++) {
+            assertThat(chunks.get(i).finishReason()).isNull();
+        }
+        assertThat(chunks.get(chunks.size() - 1).finishReason()).isEqualTo(ChatChunk.FINISH_REASON_UNKNOWN);
+
+        ArgumentCaptor<Message> assistantMessageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(conversationService).persistAssistantTurn(assistantMessageCaptor.capture());
+        assertThat(assistantMessageCaptor.getValue().getFinishReason()).isEqualTo(ChatChunk.FINISH_REASON_UNKNOWN);
+    }
+
+    @Test
+    @DisplayName("(무태그 -- 대응 AC 없음, BL-003 한계 문서화) SDK 가 스트림 내내 finishReason 을 한 번도 "
+            + "주지 않으면 저장되는 assistant 행은 onStreamTerminated 의 폴백으로 unknown 이 확정된다. 이 "
+            + "시나리오의 와이어 마지막 청크가 non-null 이라고는 단언하지 않는다 -- toChunk 는 이 경우 "
+            + "finishReasonHolder 를 한 번도 채우지 않으므로 방출된 마지막 청크 자체는 여전히 null 일 수 "
+            + "있고, onStreamTerminated 의 폴백은 저장 시점에만 적용되지 이미 나간 와이어 청크를 다시 쓰지 "
+            + "않는다 (구현자가 명시한 한계, 지시문 \"이것을 단언하는 테스트는 쓰지 마라\")")
+    void sdkNeverSupplyingAFinishReasonStillPersistsUnknownButWireLastChunkIsNotAssertedNonNull() {
+        // given: no finish reason on any scripted response, including the terminal one -- mirrors
+        //   an SDK response whose finish reason is genuinely absent, not merely unmapped
+        when(streamResponseSpec.chatResponse())
+                .thenReturn(scriptedResponses(List.of("hello", " world"), null));
+        Conversation conversation = conversationStub();
+
+        // when
+        List<ChatChunk> chunks = service.streamReply(conversation, null, "hi").collectList().block();
+
+        // then: deliberately no assertion on chunks.get(chunks.size() - 1).finishReason() -- see
+        //   this test's own [DisplayName] for why that would misrepresent an unguaranteed axis
+        assertThat(chunks).isNotEmpty();
+
+        // then: the persisted row is the one axis BL-003 actually guarantees for this scenario
+        ArgumentCaptor<Message> assistantMessageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(conversationService).persistAssistantTurn(assistantMessageCaptor.capture());
+        assertThat(assistantMessageCaptor.getValue().getFinishReason()).isEqualTo(ChatChunk.FINISH_REASON_UNKNOWN);
     }
 
     @Test
