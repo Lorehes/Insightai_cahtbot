@@ -10,6 +10,14 @@ import nextConfig from "./next.config";
  * mocking -- there is nothing to mock, it is a pure config value) so a future edit that
  * reintroduces a directly-under-`/api` wildcard for convenience fails a test instead of
  * only a manual review.
+ * [Caution] The second test's title below still says "four path families" even though the
+ *   asserted array has grown to seven (six since document-ingestion T11, then a seventh --
+ *   `/api/admin/usage` -- added by eval-usage-dashboard U3). That is not a stale title
+ *   someone forgot to update -- design-system:AC-18 pins this test's exact *name* as one of
+ *   its baseline names (`src/app/design-tokens.test.ts`'s `D1_BASELINE_NAMES`), so the title
+ *   is intentionally frozen even as the path-family count it covers keeps growing. Do not
+ *   "fix" the number in the title; if the count changes again, update only the array below
+ *   and the inline comment next to it (see review 2026-08-30 T11 2R Medium-2).
  */
 describe("next.config.ts rewrites", () => {
   it("does not proxy a bare /api/:path* wildcard (regression guard for review 2026-08-29 High-1)", async () => {
@@ -43,8 +51,22 @@ describe("next.config.ts rewrites", () => {
     );
 
     // then
+    // Test title kept byte-for-byte (design-system:AC-18 pins baseline test *names*,
+    // src/app/design-tokens.test.ts's D1_BASELINE_NAMES) even though the count in it is now
+    // stale -- grew from 4 to 7 path families (document-ingestion T11's `lib/api/documents.ts`,
+    // then eval-usage-dashboard U3's `lib/api/usage.ts`), still the same "name only what
+    // `lib/api/**` actually calls" discipline this test's own [Purpose] describes, not a
+    // reopened wildcard (the sibling test above still guards that).
     expect(sources.sort()).toEqual(
-      ["/api/session", "/api/models", "/api/conversations", "/api/conversations/:path*"].sort(),
+      [
+        "/api/session",
+        "/api/models",
+        "/api/conversations",
+        "/api/conversations/:path*",
+        "/api/admin/documents",
+        "/api/admin/documents/:id",
+        "/api/admin/usage",
+      ].sort(),
     );
   });
 });

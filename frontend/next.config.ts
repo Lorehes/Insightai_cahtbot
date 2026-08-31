@@ -99,31 +99,42 @@ const REACT_MARKDOWN_ESM_DEPENDENCIES = [
 // the component-level guard still can't load a cross-origin image, because the browser
 // itself refuses the request.
 //
-// `style-src` has no `'unsafe-inline'` -- measured, not assumed. The starting hypothesis
-// (per review 2026-08-29 Medium-1) was that `next/font` (Geist/Geist Mono, used in
-// `app/layout.tsx`) injects an inline `<style>` carrying `@font-face`/`size-adjust` rules,
-// which would need `'unsafe-inline'`. An actual `npm run build && npm start` +
-// `curl http://127.0.0.1:3000/` check showed otherwise for this exact toolchain (Next
-// 16.3.3 with Turbopack): the served HTML has zero `<style>` elements and zero `style=`
-// attributes, and the `@font-face` rules for both fonts are present in the *external*
+// `style-src` has no `'unsafe-inline'` -- measured, not assumed. This was originally
+// measured while the app still used `next/font` (Geist/Geist Mono, then used in
+// `app/layout.tsx`). The starting hypothesis (per review 2026-08-29 Medium-1) was that
+// `next/font` injects an inline `<style>` carrying `@font-face`/`size-adjust` rules, which
+// would need `'unsafe-inline'`. An actual `npm run build && npm start` +
+// `curl http://127.0.0.1:3000/` check showed otherwise for that toolchain (Next 16.3.3
+// with Turbopack): the served HTML had zero `<style>` elements and zero `style=`
+// attributes, and the `@font-face` rules for both fonts were present in the *external*
 // `.css` chunk files linked via `<link rel="stylesheet">` instead (confirmed by fetching
-// those chunk URLs directly and grepping for `@font-face`). So this Next/Turbopack
-// combination bundles font CSS into the same external stylesheet as everything else
-// (this app's CSS Modules), and `style-src 'self'` alone covers it -- no `'unsafe-inline'`
-// carve-out needed. If a future Next/font upgrade reintroduces inline font styles, the
-// symptom will be the custom font silently not applying (falls back to the browser
-// default) with a CSP violation in the browser console naming `style-src`; that is the
-// trigger to revisit this, not something to pre-emptively loosen now.
+// those chunk URLs directly and grepping for `@font-face`). So that Next/Turbopack
+// combination bundled font CSS into the same external stylesheet as everything else
+// (this app's CSS Modules), and `style-src 'self'` alone covered it -- no `'unsafe-inline'`
+// carve-out needed.
 //
-// review 2026-08-29 round-3 L1: `next dev` (not `next build`/`next start`) does trip
-// `style-src 'self'` today -- measured at 32 browser-console violations plus one blocked
-// `eval()` call, all traced to the `next-devtools` dev overlay and to `next/font`'s
-// *dev-only* runtime `<style>` injection for `@font-face`. This is a known, accepted dev-
-// only exception, not the re-check trigger described above: the production build measured
-// above still ships zero inline `<style>`/`style=` at both the served-HTML and the post-JS
-// DOM boundary. Do not add `'unsafe-eval'` or an `'unsafe-inline'` carve-out to `style-src`
-// to silence this -- that would weaken the policy that actually ships to users for a dev-
-// only cosmetic console warning.
+// design-system AD-6 has since removed `next/font` entirely -- `app/layout.tsx`'s
+// [Rationale] confirms it, and the font stack is now the Pretendard-first system stack in
+// `--font-sans` (`globals.css`), which needs no JS-injected `<style>` at all. That makes
+// the hypothesis this paragraph tested moot rather than merely re-confirmed: there is no
+// `next/font` runtime left in this codebase to inject anything. The conclusion
+// (`style-src 'self'` with no `'unsafe-inline'`) stands on stronger ground now, not
+// weaker. If a future font-loading mechanism (`next/font` or otherwise) is reintroduced,
+// re-run the `npm run build && npm start` + curl check above before assuming this still
+// holds -- do not assume from this comment alone.
+//
+// review 2026-08-29 round-3 L1: `next dev` (not `next build`/`next start`) tripped
+// `style-src 'self'` at the time this was measured -- 32 browser-console violations plus
+// one blocked `eval()` call, all traced to the `next-devtools` dev overlay and to
+// `next/font`'s *dev-only* runtime `<style>` injection for `@font-face`. That measurement
+// predates AD-6's removal of `next/font` (previous paragraph) -- the `next/font` half of
+// this attribution no longer has a source in this codebase, and whether the
+// `next-devtools` half alone still produces violations has not been re-measured since.
+// This was a known, accepted dev-only exception, not the re-check trigger described
+// above: the production build measured above still ships zero inline `<style>`/`style=`
+// at both the served-HTML and the post-JS DOM boundary. Do not add `'unsafe-eval'` or an
+// `'unsafe-inline'` carve-out to `style-src` to silence this -- that would weaken the
+// policy that actually ships to users for a dev-only cosmetic console warning.
 //
 // review 2026-08-29 round-2 High-1: the paragraph that used to stand here claimed
 // `script-src` also needed no `'unsafe-inline'` because "this app ships no inline
@@ -197,9 +208,18 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        // Applies to every route this app serves (there is only one: the chat page and
-        // its Next-internal assets) -- there is no separate public/marketing route that
-        // would need a different, looser policy.
+        // Applies to every response Next generates itself (the chat page, its Next-internal
+        // assets, 404s) -- but NOT to the path families `rewrites()` below proxies (7 as of
+        // eval-usage-dashboard U3: `/api/session`, `/api/models`, `/api/conversations`,
+        // `/api/conversations/:path*`, `/api/admin/documents`, `/api/admin/documents/:id`,
+        // `/api/admin/usage` -- this list grows as new `lib/api/**` callers are added, so treat
+        // the count as a snapshot, not a fixed fact). Measured directly (chat 3R security axis, curl -D-):
+        // those proxied responses carry none of these headers, because Next does not run its
+        // own `headers()` config against a response it is merely forwarding. This is exactly
+        // why `chat:AC-46`'s wording was narrowed from "모든 라우트" to "Next 가 자체 생성하는
+        // 모든 응답 (프록시 rewrites 응답 제외)". The gap itself -- these proxied path families
+        // having no security headers -- is tracked separately as `BL-001` (open) rather than
+        // fixed here.
         source: "/:path*",
         headers: SECURITY_HEADERS,
       },
@@ -243,6 +263,58 @@ const nextConfig: NextConfig = {
         // so this one keeps a wildcard but scoped under `/api/conversations/` only.
         source: "/api/conversations/:path*",
         destination: `${BACKEND_ORIGIN}/api/conversations/:path*`,
+      },
+      {
+        // `lib/api/documents.ts` (document-ingestion T11) -- POST (upload) / GET (list) on
+        // the collection itself, no `:id` segment.
+        //
+        // review 2026-08-29 High-1 (comment above) removed a `/api/:path*` catch-all
+        // specifically because it also proxied `/api/admin/**` to any LAN client that could
+        // reach this dev/demo server. Re-adding a route under `/api/admin/` here looks like
+        // the same regression, but is not: (1) it is scoped to exactly `/api/admin/documents`
+        // and its `:path*` sibling below, the same "name only what `lib/api/**` actually
+        // calls" discipline the `/api/conversations` pair above already follows -- not a
+        // wildcard; (2) both `npm run dev` and `npm run start` (package.json scripts) already
+        // bind this Next server itself to `-H 127.0.0.1`, so the exposure surface these two
+        // routes add is symmetric with the rest of this proxy, not broader than it. The admin
+        // screen these routes serve (document-ingestion T11) is the reason the endpoints need
+        // reaching through this proxy at all -- Spec §7 OQ-7 leaves them unauthenticated on
+        // the backend by design, same as `/api/conversations` before it.
+        source: "/api/admin/documents",
+        destination: `${BACKEND_ORIGIN}/api/admin/documents`,
+      },
+      {
+        // `lib/api/documents.ts` -- DELETE `.../admin/documents/{id}`, the only sub-path this
+        // card calls.
+        //
+        // review 2026-08-30 T11 1R Medium-1 (security): this used to read `:path*`, which --
+        // unlike the `/api/conversations/:path*` sibling above, which really does need two
+        // different sub-paths (`{id}` and `{id}/messages`) -- matches *any* number of segments
+        // under `/api/admin/documents/`, not just the single `{id}` segment `deleteDocument`
+        // actually calls. That over-matched `POST /api/admin/documents/orphan-chunks/cleanup`
+        // (T10 AC-18, the orphan-chunk batch-cleanup endpoint) too, proxying a destructive
+        // admin action this card never calls and never asked for. `:id` is Next's single-
+        // segment dynamic-route syntax (no trailing `*`), so it matches exactly one path
+        // segment after `/api/admin/documents/` and nothing deeper -- narrowing this rule back
+        // to what `deleteDocument`'s own [Purpose] documents as the only sub-path this card
+        // calls, so that "the only sub-path this card calls" comment is now actually true of
+        // what the rule matches, not just of what the FE code happens to call.
+        source: "/api/admin/documents/:id",
+        destination: `${BACKEND_ORIGIN}/api/admin/documents/:id`,
+      },
+      {
+        // `lib/api/usage.ts` (eval-usage-dashboard U3) -- GET on the collection itself, no
+        // sub-path (query string `?from=&to=` only, which rewrites already forwards through
+        // unchanged).
+        //
+        // review 2026-08-29 High-1 (comment above) removed a `/api/:path*` catch-all
+        // specifically because it also proxied `/api/admin/**` to any LAN client that could
+        // reach this dev/demo server. Adding this one route follows the same "name only what
+        // `lib/api/**` actually calls" discipline the two `/api/admin/documents*` rules above
+        // already do -- scoped to exactly `/api/admin/usage`, not a wildcard under
+        // `/api/admin/`.
+        source: "/api/admin/usage",
+        destination: `${BACKEND_ORIGIN}/api/admin/usage`,
       },
     ];
   },

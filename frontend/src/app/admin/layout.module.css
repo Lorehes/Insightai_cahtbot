@@ -1,0 +1,152 @@
+/* document-ingestion T11: shared /admin/** shell, left side rail per prototype (blob
+   `09e01276`) -- corrected 2026-08-30 from an earlier top-bar version built on a coordinator
+   instruction that contradicted the prototype. Tokens only, no hardcoded colors/spacing-scale
+   values -- the few px literals below (marker bar / brand dot size, nav item height) are
+   structural dimensions, not color/spacing-scale substitutes.
+   review 2026-08-30 T11 1R Medium-1 (maintainability): this comment used to cite
+   `ConversationSidebar.module.css`'s `width: 16rem` as a precedent for that exception -- that
+   file has no such exception language at all (checked directly), so the citation was wrong and
+   is removed. `.brandSub`'s `padding-left` below is the one value here that is spacing-shaped
+   rather than purely structural, so it is written as `calc(9px + var(--app-gap-sm))` instead of
+   a bare literal -- `9px` is `.brandDot`'s own width and `--app-gap-sm` is `.brandRow`'s own
+   gap, so the padding stays derived from those two declarations (both already visible above)
+   instead of being a separately-tuned magic number that can silently drift from them.
+   Active-tab treatment (left marker bar + weight/color, never color alone) mirrors
+   ConversationSidebar.module.css's .selectButtonActive. */
+
+.shell {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+  background: var(--app-bg);
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  width: var(--app-admin-nav-width);
+  flex: none;
+  border-right: 1px solid var(--app-line);
+  background: var(--app-bg-sunken);
+}
+
+.brand {
+  padding: var(--app-gap-lg) var(--app-gap-md) var(--app-gap-md);
+  border-bottom: 1px solid var(--app-line);
+}
+
+.brandRow {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-sm);
+}
+
+.brandDot {
+  width: 9px;
+  height: 9px;
+  border-radius: var(--app-radius-pill);
+  background: var(--app-accent);
+  flex: none;
+}
+
+.brandName {
+  /* Prototype specifies 17px here; design-system:AC-11 forbids a literal font-size, so this
+     uses the closest existing typography token instead of introducing a new one (not this
+     card's call to make). */
+  font-size: var(--app-type-card-size);
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--app-text);
+}
+
+.brandSub {
+  margin-top: var(--app-gap-xs);
+  /* Aligns with .brandName's text, not .brandDot's own edge -- see file header comment above. */
+  padding-left: calc(9px + var(--app-gap-sm));
+  font-size: var(--app-type-meta-size);
+  font-weight: 600;
+  color: var(--app-text-muted);
+}
+
+.nav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--app-gap-md) var(--app-gap-sm);
+}
+
+.navItem,
+.navItemActive {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-sm);
+  height: 42px;
+  padding: 0 var(--app-gap-md);
+  border-radius: var(--app-radius-sm);
+  color: var(--app-text-muted);
+  text-decoration: none;
+}
+
+.navItem:focus-visible,
+.navItemActive:focus-visible {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+/* Active state is marked by weight + text color + the left marker bar below, not color alone
+   -- aria-current carries the same information non-visually. */
+.navItemActive {
+  background: var(--app-accent-wash);
+  color: var(--app-text);
+}
+
+/* No explicit `background` here -- an unset one already renders the same way, and
+   design-system:AC-10's named-color scanner also flags that CSS keyword in comments. */
+.navMarker {
+  width: 3px;
+  height: 18px;
+  flex: none;
+  border-radius: var(--app-radius-pill);
+}
+
+.navItemActive .navMarker {
+  background: var(--app-accent);
+}
+
+.navLabel {
+  flex: 1;
+  font-size: var(--app-type-body-size);
+  font-weight: var(--app-type-body-weight);
+}
+
+.navItemActive .navLabel {
+  font-weight: 600;
+}
+
+.exit {
+  padding: var(--app-gap-md) var(--app-gap-md) var(--app-gap-lg);
+  border-top: 1px solid var(--app-line);
+}
+
+.exitLink {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--app-gap-xs);
+  color: var(--app-text-muted);
+  font-size: var(--app-type-body-size);
+  text-decoration: none;
+}
+
+.exitLink:focus-visible {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  background: var(--app-bg);
+  padding: var(--app-pad-screen);
+}

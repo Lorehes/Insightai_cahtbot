@@ -1,0 +1,367 @@
+/* document-ingestion T11: admin document manager screen. Tokens only, no hardcoded
+   colors/spacing -- the `.dialogOverlay::before` scrim below (see its own comment) and
+   `:has()` here both derive their effect from existing --app-* tokens rather than
+   introducing a new literal color (no scrim/overlay token exists in globals.css to
+   reference directly). */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap-lg);
+  max-width: var(--app-answer-max);
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap-xs);
+}
+
+.header h1 {
+  font-size: var(--app-type-page-size);
+  font-weight: var(--app-type-page-weight);
+}
+
+.description {
+  color: var(--app-text-muted);
+  font-size: var(--app-type-meta-size);
+}
+
+.uploadForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap-sm);
+  padding: var(--app-gap-lg);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+}
+
+.uploadHeading {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-xs);
+  font-size: var(--app-type-card-size);
+  font-weight: var(--app-type-card-weight);
+}
+
+.uploadHint {
+  color: var(--app-text-muted);
+  font-size: var(--app-type-meta-size);
+}
+
+.uploadActions {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-sm);
+}
+
+.fileLabel {
+  position: relative;
+  display: inline-block;
+  padding: var(--app-gap-sm) var(--app-gap-md);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-xs);
+  background: var(--app-surface);
+  color: var(--app-text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.fileLabel:has(.fileInput:focus-visible) {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+.fileInput {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.uploadButton {
+  padding: var(--app-gap-sm) var(--app-gap-md);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-xs);
+  background: var(--app-accent);
+  color: var(--app-text-inverse);
+  cursor: pointer;
+  font: inherit;
+  font-weight: bold;
+}
+
+.uploadButton:focus-visible {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+.uploadButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.error {
+  color: var(--app-status-danger);
+  font-weight: bold;
+}
+
+.pollingIndicator {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-xs);
+  color: var(--app-text-muted);
+  font-size: var(--app-type-meta-size);
+}
+
+.loadingState .table {
+  opacity: 0.6;
+}
+
+.skeletonBar {
+  height: var(--app-gap-md);
+  border-radius: var(--app-radius-xs);
+  background: linear-gradient(
+    90deg,
+    var(--app-surface-strong),
+    var(--app-surface-hover),
+    var(--app-surface-strong)
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.errorState,
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap-xs);
+  padding: var(--app-gap-lg);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+}
+
+.errorState h2,
+.emptyState h2 {
+  font-size: var(--app-type-section-size);
+  font-weight: var(--app-type-section-weight);
+}
+
+.emptyState p {
+  color: var(--app-text-muted);
+}
+
+.retryButton {
+  align-self: flex-start;
+  padding: var(--app-gap-sm) var(--app-gap-md);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-xs);
+  background: var(--app-surface);
+  color: var(--app-text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.retryButton:focus-visible {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+.table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: var(--app-gap-sm);
+  border-bottom: 1px solid var(--app-line-soft);
+  text-align: left;
+  font-size: var(--app-type-body-size);
+  vertical-align: top;
+}
+
+.table th {
+  color: var(--app-text-muted);
+  font-size: var(--app-type-label-size);
+  font-weight: var(--app-type-label-weight);
+}
+
+.alignRight {
+  text-align: right;
+}
+
+.colFilename {
+  width: 26%;
+}
+.colFormat {
+  width: 8%;
+}
+.colSize {
+  width: 10%;
+}
+.colStatus {
+  width: 12%;
+}
+.colChunks {
+  width: 8%;
+}
+.colUploaded {
+  width: 15%;
+}
+.colIndexed {
+  width: 15%;
+}
+.colActions {
+  width: 6%;
+}
+
+.formatCell {
+  color: var(--app-text-muted);
+  font-family: var(--app-type-mono);
+  font-size: var(--app-type-code-size);
+}
+
+.rowError {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--app-gap-xs);
+  margin-top: var(--app-gap-xs);
+  font-size: var(--app-type-meta-size);
+}
+
+.deleteButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--app-gap-xs);
+  border: none;
+  /* `background: none`, not a see-through-color keyword literal (design-system:AC-10 bans
+     it) -- the shorthand resets background-color to its own initial value, which already
+     shows nothing underneath, without writing that banned word. */
+  background: none;
+  color: var(--app-text-body);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--app-type-meta-size);
+  padding: var(--app-gap-xs) var(--app-gap-sm);
+}
+
+.deleteButton:hover,
+.deleteButton:focus-visible {
+  color: var(--app-status-danger);
+}
+
+.deleteButton:focus-visible {
+  outline: 2px solid var(--app-status-danger);
+  outline-offset: 2px;
+}
+
+.footerCount {
+  text-align: right;
+  color: var(--app-text-faint);
+  font-size: var(--app-type-meta-size);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.dialogOverlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+/* No scrim/overlay token exists in globals.css, and design-system:AC-10 bans a hardcoded
+   hex/named/function-form color literal for one -- this pseudo-element paints the existing
+   --app-text token as a solid fill and dims *only itself* via `opacity`, instead of writing a
+   partial-alpha color literal. It is a sibling layer behind .dialog (both direct children of
+   .dialogOverlay; .dialog's own `position: relative` stacks it above this `position: absolute`
+   pseudo-element), so the opacity never touches .dialog's own contents. */
+.dialogOverlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--app-text);
+  opacity: 0.45;
+}
+
+.dialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap-md);
+  max-width: 28rem;
+  padding: var(--app-gap-lg);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow);
+}
+
+.dialog h2 {
+  font-size: var(--app-type-section-size);
+  font-weight: var(--app-type-section-weight);
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--app-gap-sm);
+}
+
+.cancelButton {
+  padding: var(--app-gap-sm) var(--app-gap-md);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-xs);
+  background: var(--app-surface);
+  color: var(--app-text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.confirmDeleteButton {
+  padding: var(--app-gap-sm) var(--app-gap-md);
+  border: 1px solid var(--app-status-danger);
+  border-radius: var(--app-radius-xs);
+  background: var(--app-status-danger-wash);
+  color: var(--app-status-danger);
+  cursor: pointer;
+  font: inherit;
+  font-weight: bold;
+}
+
+.cancelButton:focus-visible,
+.confirmDeleteButton:focus-visible {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+.cancelButton:disabled,
+.confirmDeleteButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
