@@ -17,36 +17,69 @@ export interface ChatUsage {
 }
 
 /**
+ * [Purpose] One citation entry carried on `ChatChunk.sources` (hybrid-rag Spec AC-11,
+ *   confirmed against `chat/domain/ChatChunk.java`'s nested `Source` record for this card).
+ * [Caution] `score` and `snippet` are part of the wire shape but this card does not render
+ *   them (hybrid-rag Spec §7 OQ-3, decision D-A, 2026-08-30) -- do not add UI for them without
+ *   a new AC. `filename`/`snippet` reach the wire unescaped (hybrid-rag Spec T15 security
+ *   Low-1) -- render them only as plain text nodes (JSX interpolation), never via
+ *   `dangerouslySetInnerHTML`.
+ */
+export interface ChatSource {
+  documentId: string;
+  filename: string;
+  score: number;
+  snippet: string;
+  page: number | null;
+}
+
+/**
  * [Purpose] Wire shape for one SSE event of `POST /api/conversations/{id}/messages` --
  *   mirrors the backend `ChatChunk` record verbatim (chat Spec Tech Review A-6, confirmed
  *   against `chat/domain/ChatChunk.java` and `chat/api/ConversationController.java` for
  *   this card).
- * [Caution] `finishReason` is **not normalized** across sources as of this card (uppercase
- *   `"STOP"` from the real OpenAI SDK vs. lowercase `"error"` from this backend's own
- *   `ChatChunk.FINISH_REASON_ERROR` constant; `ChatChunk.FINISH_REASON_CANCELLED` is never
- *   sent to a client by construction; an SDK `_UNKNOWN` case could plausibly send `null`)
- *   -- this is an open Spec question, not yet resolved. Never branch on a specific literal
- *   value. Only two uses of this field are safe: (a) whether it is non-null, as a
- *   *candidate* signal that a chunk might be the last one, and (b) {@link isErrorFinish}'s
- *   case-insensitive compare against `"error"`, to show a failure. Stream *completion*
- *   must be read from the reader closing (`done`), never from this field -- see
- *   {@link streamAssistantReply}.
- * [AC] chat:AC-36
+ * [Caution] `finishReason` is normalized to lowercase by the backend as of `BL-003`
+ *   (2026-08-30) -- `ChatChunk.normalizeFinishReason` folds the SDK's uppercase `enum.name()`
+ *   (`"STOP"` -> `"stop"`) before it reaches the wire, and a value the SDK can't map plus an
+ *   absent value both become the literal `"unknown"` at the storage axis. `"error"`/
+ *   `"cancelled"` were already lowercase. **Unresolved**: on the path where the SDK never
+ *   supplies a finish reason at all, the final chunk can still arrive with `finishReason:
+ *   null` -- tracked as `BL-009` in `{DOC_ROOT}/docs/harness/backlog.jsonl`, not yet closed.
+ *   Do not assume a non-null value is now guaranteed. Never branch on a specific literal
+ *   value beyond {@link isErrorFinish}'s check. Only two uses of this field are safe: (a)
+ *   whether it is non-null, as a *candidate* signal that a chunk might be the last one, and
+ *   (b) {@link isErrorFinish}'s case-insensitive compare against `"error"`, to show a
+ *   failure. Stream *completion* must be read from the reader closing (`done`), never from
+ *   this field -- see {@link streamAssistantReply}.
+ * [Caution] `sources` follows the same "present only on the terminal chunk" pattern as
+ *   `usage`: every mid-stream chunk carries `sources: null`. Unlike `usage`, the terminal
+ *   chunk is **not guaranteed** to carry a non-null value -- `BL-019` (2026-08-31, accepted as
+ *   a known defect, not fixed): on the same SDK path that leaves `finishReason: null`
+ *   (`BL-009`), `sources` leaks `null` on the terminal chunk too. A consumer must therefore
+ *   read stream completion from the reader closing (`done`, see {@link streamAssistantReply}),
+ *   not from `sources` becoming non-null, and must treat "stream ended, `sources` still null"
+ *   as its own distinct state -- never assume that state means "no citations" (hybrid-rag
+ *   Spec AC-21, clause ③).
+ * [AC] chat:AC-36, hybrid-rag:AC-21
  */
 export interface ChatChunk {
   conversationId: string;
   delta: string | null;
   finishReason: string | null;
   usage: ChatUsage | null;
+  sources: ChatSource[] | null;
 }
 
 /**
  * [Purpose] Case-insensitive check for whether a `ChatChunk.finishReason` marks a
  *   server-side failure (chat Spec Tech Review A-7, `ChatChunk.error`).
- * [Rationale] The backend's own error constant is the lowercase literal `"error"`, but
- *   this card's brief explicitly warns `finishReason` casing is not normalized project-
- *   wide (see {@link ChatChunk} [Caution]) -- comparing case-insensitively is the one
- *   documented-safe way to detect this specific value without depending on exact casing.
+ * [Rationale] The backend's own error constant is the lowercase literal `"error"`, and as of
+ *   `BL-003` (2026-08-30) the backend normalizes `finishReason` to lowercase before it ever
+ *   reaches the wire (see {@link ChatChunk} [Caution]) -- so this comparison now matches the
+ *   wire value exactly either way. The case-insensitive compare is kept anyway: it costs
+ *   nothing and stays a defense against a backend regression that reintroduces mixed casing.
+ *   The project's no-specific-literal-branching principle still applies everywhere else on
+ *   this field; this function remains the one documented exception.
  */
 export function isErrorFinish(finishReason: string | null): boolean {
   return finishReason !== null && finishReason.toLowerCase() === "error";

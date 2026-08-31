@@ -291,7 +291,7 @@ describe("getMessages", () => {
 
 // Exercises the exported type shape at compile time -- if the wire contract in
 // messages.ts ever drifts from this literal, `tsc --noEmit` fails, not just this test.
-const _typeCheck: ChatChunk = { conversationId: "c1", delta: null, finishReason: null, usage: null };
+const _typeCheck: ChatChunk = { conversationId: "c1", delta: null, finishReason: null, usage: null, sources: null };
 void _typeCheck;
 const _messageTypeCheck: MessageResponse = { role: "user", content: "hi", createdAt: "2026-08-28T00:00:00Z" };
 void _messageTypeCheck;

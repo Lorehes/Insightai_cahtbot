@@ -1,5 +1,6 @@
 import { memo } from "react";
 import Markdown, { type Components } from "react-markdown";
+import type { ChatSource } from "@/lib/api/messages";
 import styles from "./MessageList.module.css";
 
 /**
@@ -8,12 +9,27 @@ import styles from "./MessageList.module.css";
  *   `lib/api/conversations.ts` (conversation metadata).
  * [Caution] `streamStatus` only carries meaning for `role: "assistant"` -- a user message
  *   is always complete the moment it is sent, so it has no "streaming" state to track.
+ * [Caution] `sources` carries meaning only for `role: "assistant"` and only distinguishes its
+ *   values together with `streamStatus` (hybrid-rag Spec AC-21) -- `null` while
+ *   `streamStatus === "streaming"` means "not yet known" (render nothing, clause ①); `null`
+ *   once `streamStatus` is terminal (`"done"`/`"error"`) means "stream ended without ever
+ *   receiving one" (`BL-019`, clause ③); an array (possibly empty) is the resolved value
+ *   (clause ②, `AC-18`/`AC-20`); `undefined` means no stream was ever tracked for this
+ *   message at all (e.g. loaded from history) and is deliberately distinct from `null` --
+ *   see {@link ../chat-panel/MessageList}'s `SourceList` [Caution] for why collapsing the two
+ *   is a defect, not a simplification. A caller must set this once, alongside the final
+ *   `streamStatus` transition -- see {@link ../chat-panel/ChatPanel}'s `handleSend`. This same
+ *   per-message field is also what makes `AC-22` (citations stay attached to the message that
+ *   carried them, never bleed into a later turn) true for free -- there is no shared/global
+ *   sources state to accidentally cross-contaminate.
+ * [AC] hybrid-rag:AC-21, hybrid-rag:AC-22
  */
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   streamStatus?: "streaming" | "done" | "error";
+  sources?: ChatSource[] | null;
 }
 
 /**
@@ -76,17 +92,20 @@ const MessageRow = memo(function MessageRow({ message }: { message: ChatMessage 
           default: color/layout alone must not carry information). */}
       <span className={styles.roleLabel}>{message.role === "user" ? "나" : "어시스턴트"}</span>
       {message.role === "assistant" ? (
-        <div
-          className={styles.markdown}
-          // A live region so a streaming reply's incremental growth is announced to
-          // screen readers too, not only visible sighted users.
-          role="status"
-          aria-live="polite"
-          aria-busy={message.streamStatus === "streaming"}
-          data-testid={`message-${message.id}`}
-        >
-          <Markdown components={markdownComponents}>{message.content}</Markdown>
-        </div>
+        <>
+          <div
+            className={styles.markdown}
+            // A live region so a streaming reply's incremental growth is announced to
+            // screen readers too, not only visible sighted users.
+            role="status"
+            aria-live="polite"
+            aria-busy={message.streamStatus === "streaming"}
+            data-testid={`message-${message.id}`}
+          >
+            <Markdown components={markdownComponents}>{message.content}</Markdown>
+          </div>
+          <SourceList sources={message.sources} streamStatus={message.streamStatus} />
+        </>
       ) : (
         <p className={styles.plainText} data-testid={`message-${message.id}`}>
           {message.content}
@@ -104,7 +123,116 @@ function areMessagePropsEqual(
     prev.message.id === next.message.id &&
     prev.message.role === next.message.role &&
     prev.message.content === next.message.content &&
-    prev.message.streamStatus === next.message.streamStatus
+    prev.message.streamStatus === next.message.streamStatus &&
+    prev.message.sources === next.message.sources
+  );
+}
+
+/**
+ * [Purpose] Renders the citation area under an assistant reply -- hybrid-rag Spec `AC-18`
+ *   (1+ sources), `AC-20` (confirmed-empty sources), and `AC-21`'s three-clause state model
+ *   (streaming / resolved / stream-ended-but-never-resolved).
+ * [Rationale] `streamStatus` and `sources` are read together, not `sources` alone, because
+ *   `sources === null` is ambiguous on its own -- it means "not yet known" while streaming
+ *   (clause ①, render nothing) and "never arrived" once the stream has ended (clause ③,
+ *   `BL-019`). Clause ③'s box is deliberately a different visual treatment (solid
+ *   `--app-status-danger` border, not `AC-20`'s dashed `--app-line-strong`) so a delivery
+ *   failure is never mistaken for a confirmed "no evidence" answer (Spec AC-21 ③'s explicit
+ *   "AC-20 과 동일한 구조를 재사용하지 않는다"); the prototype has no reference screen for this
+ *   state (it is a wire-defect case, not a design one), so the icon/border choice here is this
+ *   card's own, not a ported value.
+ * [Caution] `sources === undefined` (distinct from `null`) is a fourth case AC-21's three
+ *   clauses do not cover: a message this component never tracked a stream for at all --
+ *   today, only `ChatWorkspace`'s history load (`toChatMessages`), which does not thread the
+ *   backend's `MessageResponse.sources` through yet (Spec §2 "과거 대화 이력 재조회 화면의 출처
+ *   표시" is explicitly out of scope for this card). Collapsing that into `null` would render
+ *   clause ③'s "출처를 불러오지 못했습니다." on every historical reply, falsely implying a
+ *   delivery failure that never happened (review 2026-08-31 High-1) -- so this case renders
+ *   nothing instead, same as clause ①. A live-streamed message never hits this branch:
+ *   {@link ../chat-panel/ChatPanel} sets `sources: null` explicitly the moment it creates the
+ *   message, before the stream starts.
+ * [Caution] `filename` reaches the wire unescaped (Spec T15 security Low-1) -- rendered only
+ *   via JSX text interpolation below, never `dangerouslySetInnerHTML`. `sources` itself is
+ *   also not trusted to actually be an array (review 2026-08-31 security Low-1) -- a malformed
+ *   payload falls back to the clause ③ screen rather than throwing mid-render.
+ * [AC] hybrid-rag:AC-18, hybrid-rag:AC-19, hybrid-rag:AC-20, hybrid-rag:AC-21
+ */
+function SourceList({
+  sources,
+  streamStatus,
+}: {
+  sources: ChatSource[] | null | undefined;
+  streamStatus: ChatMessage["streamStatus"];
+}) {
+  if (streamStatus === "streaming" || streamStatus === undefined) {
+    return null; // AC-21 clause (1): stream not yet ended -- nothing to show.
+  }
+
+  if (sources === undefined) {
+    return null; // No stream was ever tracked for this message (e.g. loaded from history).
+  }
+
+  if (!isValidSourceList(sources)) {
+    // Covers `null` (clause (3), BL-019: stream ended, sources never arrived), any non-array
+    // value, and an array containing a malformed element (review 2026-08-31 round-2 security
+    // Low-1: a single bad element, e.g. `[null]`, must not crash `formatSourceLabel` mid-map --
+    // rejecting the whole value here keeps AC-18's "rendered count matches sources.length"
+    // guarantee intact for well-formed data instead of silently dropping just the bad element).
+    return (
+      <div className={styles.sourcesFailed}>
+        <span aria-hidden="true">⚠</span> 출처를 불러오지 못했습니다.
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.sources}>
+      <div className={styles.sourcesHeader}>
+        <span className={styles.sourcesLabel}>출처</span>
+        <span className={styles.sourcesCount}>{sources.length}건</span>
+      </div>
+      {sources.length === 0 ? (
+        <div className={styles.sourcesEmpty}>
+          <span aria-hidden="true">✕</span> 이 답변에는 근거 문서가 없습니다.
+        </div>
+      ) : (
+        <ul className={styles.sourceItems}>
+          {sources.map((source, index) => (
+            // Keyed on more than `documentId` alone: the backend maps one Source per
+            // *retrieved chunk*, not per document (`ChatService#resolveSources`), so two
+            // sources from the same document (different pages) are a normal result and would
+            // otherwise collide (review 2026-08-31 Medium-2).
+            <li key={`${source.documentId}-${source.page ?? "na"}-${index}`} className={styles.sourceItem}>
+              {formatSourceLabel(source)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** "<filename> p.<page>" when `page` is present, "<filename>" alone otherwise (hybrid-rag
+ *  Spec AC-19, §7 Q2's confirmed display rule -- not a new decision made here). */
+function formatSourceLabel(source: ChatSource): string {
+  return source.page !== null ? `${source.filename} p.${source.page}` : source.filename;
+}
+
+/** True only for an array whose every element has at least the shape `formatSourceLabel` and
+ *  the `<li>` key builder above actually read (`filename`, `page`, `documentId`) -- guards
+ *  against a wire-contract violation like `sources: [null]` reaching `.map` (review 2026-08-31
+ *  round-2 security Low-1). */
+function isValidSourceList(sources: unknown): sources is ChatSource[] {
+  return (
+    Array.isArray(sources) &&
+    sources.every(
+      (s) =>
+        typeof s === "object" &&
+        s !== null &&
+        typeof (s as ChatSource).filename === "string" &&
+        typeof (s as ChatSource).documentId === "string" &&
+        ((s as ChatSource).page === null || typeof (s as ChatSource).page === "number"),
+    )
   );
 }
 

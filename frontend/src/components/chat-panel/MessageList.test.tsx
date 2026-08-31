@@ -155,4 +155,237 @@ describe("MessageList", () => {
     rerender(<MessageList messages={[assistantMessage("full", { streamStatus: "done" })]} />);
     expect(screen.getByTestId("message-a1")).toHaveAttribute("aria-busy", "false");
   });
+
+  describe("citation area (hybrid-rag Spec T15)", () => {
+    it("[hybrid-rag:AC-18] renders a \"출처\" header with the count and one item per source", () => {
+      render(
+        <MessageList
+          messages={[
+            assistantMessage("answer", {
+              sources: [
+                { documentId: "d1", filename: "인사규정_2026.pdf", score: 0.02, snippet: "s1", page: 12 },
+                { documentId: "d2", filename: "취업규칙.pdf", score: 0.01, snippet: "s2", page: null },
+              ],
+            }),
+          ]}
+        />,
+      );
+
+      expect(screen.getByText("출처")).toBeInTheDocument();
+      expect(screen.getByText("2건")).toBeInTheDocument();
+      // Scoped to this message's own row: the transcript itself is also a <ul>/<li> structure
+      // (MessageList.module.css .list/.assistantRow), so an unscoped query would also match the
+      // outer row's own <li>.
+      const row = within(screen.getByTestId("message-a1").closest("li")!);
+      expect(row.getAllByRole("listitem")).toHaveLength(2);
+      // AC-18's third clause ("각 항목에 해당 항목의 filename 문자열이 표시된다") asserted directly
+      // here too (review 2026-08-31 Medium-1) -- not left solely to the AC-19 test below, so the
+      // evidence-ledger citation for AC-18 doesn't depend on a differently-tagged test.
+      expect(row.getByText(/인사규정_2026\.pdf/)).toBeInTheDocument();
+      expect(row.getByText(/취업규칙\.pdf/)).toBeInTheDocument();
+    });
+
+    it("[hybrid-rag:AC-19] shows \"filename p.page\" when page is present and just \"filename\" when page is null", () => {
+      render(
+        <MessageList
+          messages={[
+            assistantMessage("answer", {
+              sources: [
+                { documentId: "d1", filename: "인사규정_2026.pdf", score: 0.02, snippet: "s1", page: 12 },
+                { documentId: "d2", filename: "복리후생_안내.docx", score: 0.01, snippet: "s2", page: null },
+              ],
+            }),
+          ]}
+        />,
+      );
+
+      expect(screen.getByText("인사규정_2026.pdf p.12")).toBeInTheDocument();
+      expect(screen.getByText("복리후생_안내.docx")).toBeInTheDocument();
+    });
+
+    it("[hybrid-rag:AC-20] renders the \"출처\" header with 0건 and the fixed no-evidence text for an empty sources array", () => {
+      render(<MessageList messages={[assistantMessage("answer", { sources: [] })]} />);
+
+      expect(screen.getByText("출처")).toBeInTheDocument();
+      expect(screen.getByText("0건")).toBeInTheDocument();
+      expect(screen.getByText("이 답변에는 근거 문서가 없습니다.")).toBeInTheDocument();
+      // No source-item <li> under the sources area specifically (the transcript row's own
+      // outer <li> still exists and is out of scope for this assertion).
+      const row = within(screen.getByTestId("message-a1").closest("li")!);
+      expect(row.queryByRole("list")).not.toBeInTheDocument();
+    });
+
+    it("[hybrid-rag:AC-21] clause ① renders no citation area while the stream is still in progress", () => {
+      render(<MessageList messages={[assistantMessage("partial", { streamStatus: "streaming", sources: null })]} />);
+
+      expect(screen.queryByText("출처")).not.toBeInTheDocument();
+      expect(screen.queryByText("출처를 불러오지 못했습니다.")).not.toBeInTheDocument();
+    });
+
+    it("[hybrid-rag:AC-21] clause ② resolves to the AC-18/AC-20 screens once the stream ends with a non-null sources value", () => {
+      const { rerender } = render(
+        <MessageList messages={[assistantMessage("partial", { streamStatus: "streaming", sources: null })]} />,
+      );
+      expect(screen.queryByText("출처")).not.toBeInTheDocument();
+
+      rerender(
+        <MessageList
+          messages={[
+            assistantMessage("full", {
+              streamStatus: "done",
+              sources: [{ documentId: "d1", filename: "a.pdf", score: 0.01, snippet: "s", page: null }],
+            }),
+          ]}
+        />,
+      );
+      expect(screen.getByText("출처")).toBeInTheDocument();
+      expect(screen.getByText("1건")).toBeInTheDocument();
+    });
+
+    it("[hybrid-rag:AC-21] clause ③ shows a delivery-failure message, visually distinct from AC-20, when the stream ends without ever receiving sources", () => {
+      render(<MessageList messages={[assistantMessage("answer", { streamStatus: "done", sources: null })]} />);
+
+      expect(screen.getByText("출처를 불러오지 못했습니다.")).toBeInTheDocument();
+      expect(screen.queryByText("이 답변에는 근거 문서가 없습니다.")).not.toBeInTheDocument();
+      expect(screen.queryByText("출처")).not.toBeInTheDocument(); // clause ③ has no "출처"+count header at all
+    });
+
+    it("[hybrid-rag:AC-22] keeps an earlier message's sources unchanged while a later message in the same list is still streaming", () => {
+      render(
+        <MessageList
+          messages={[
+            assistantMessage("first turn answer", {
+              id: "a1",
+              streamStatus: "done",
+              sources: [{ documentId: "d1", filename: "a.pdf", score: 0.01, snippet: "s", page: null }],
+            }),
+            assistantMessage("second turn partial", { id: "a2", streamStatus: "streaming", sources: null }),
+          ]}
+        />,
+      );
+
+      const firstRow = within(screen.getByTestId("message-a1").closest("li")!);
+      expect(firstRow.getByText("출처")).toBeInTheDocument();
+      expect(firstRow.getByText("1건")).toBeInTheDocument();
+
+      const secondRow = within(screen.getByTestId("message-a2").closest("li")!);
+      expect(secondRow.queryByText("출처")).not.toBeInTheDocument();
+    });
+
+    // review 2026-08-31 High-1: a message this component never tracked a stream for (`sources`
+    // left `undefined`, e.g. loaded from conversation history) must not fall into clause ③ --
+    // that would falsely tell the user every historical reply's citations failed to load.
+    it("[hybrid-rag:AC-21] renders no citation area (not the clause ③ failure message) for a message with no sources field at all", () => {
+      render(<MessageList messages={[{ id: "h1", role: "assistant", content: "old answer", streamStatus: "done" }]} />);
+
+      expect(screen.queryByText("출처를 불러오지 못했습니다.")).not.toBeInTheDocument();
+      expect(screen.queryByText("출처")).not.toBeInTheDocument();
+    });
+
+    // review 2026-08-31 Medium-2: the backend maps one Source per retrieved *chunk*, not per
+    // document, so two sources sharing a documentId (different pages of the same file) is a
+    // normal result, not a malformed one -- this must not collide as a React key or drop items.
+    // review 2026-08-31 round-2 correctness Medium-1: a single static render can't actually
+    // discriminate a React key collision (React still renders both children on first mount,
+    // only warning via console.error -- the failure mode is dropped/stale items on a later
+    // *update*, i.e. reconciliation, which a one-shot render never exercises). This test now
+    // asserts the "same key" warning is absent, and separately drives a rerender that removes
+    // the first item to prove the remaining item survives reconciliation correctly.
+    it("[hybrid-rag:AC-18] renders both items distinctly when two sources share the same documentId (different pages), without a React duplicate-key warning", () => {
+      const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const sourcesWithDuplicateDocumentId = [
+          { documentId: "d1", filename: "인사규정_2026.pdf", score: 0.02, snippet: "s1", page: 3 },
+          { documentId: "d1", filename: "인사규정_2026.pdf", score: 0.01, snippet: "s2", page: 7 },
+        ];
+        const { rerender } = render(
+          <MessageList messages={[assistantMessage("answer", { sources: sourcesWithDuplicateDocumentId })]} />,
+        );
+
+        expect(screen.getByText("2건")).toBeInTheDocument();
+        let row = within(screen.getByTestId("message-a1").closest("li")!);
+        expect(row.getAllByRole("listitem")).toHaveLength(2);
+        expect(row.getByText("인사규정_2026.pdf p.3")).toBeInTheDocument();
+        expect(row.getByText("인사규정_2026.pdf p.7")).toBeInTheDocument();
+        expect(
+          consoleErrorSpy.mock.calls.some((call) => /same key|Encountered two children/i.test(String(call[0]))),
+        ).toBe(false);
+
+        // Drives an actual reconciliation update (not just a fresh mount) -- removes the first
+        // item so a colliding key would show stale/duplicated content for the remaining one.
+        rerender(
+          <MessageList messages={[assistantMessage("answer", { sources: [sourcesWithDuplicateDocumentId[1]] })]} />,
+        );
+        row = within(screen.getByTestId("message-a1").closest("li")!);
+        expect(row.getAllByRole("listitem")).toHaveLength(1);
+        expect(row.getByText("인사규정_2026.pdf p.7")).toBeInTheDocument();
+        expect(row.queryByText("인사규정_2026.pdf p.3")).not.toBeInTheDocument();
+      } finally {
+        consoleErrorSpy.mockRestore();
+      }
+    });
+
+    // Security (hybrid-rag Spec §7 OQ-3 decision D-A, review 2026-08-31 Low-2): score/snippet/
+    // documentId must never reach the screen as visible text -- only filename/page are approved
+    // for display.
+    it("never renders a source's score, snippet, or documentId as visible text", () => {
+      render(
+        <MessageList
+          messages={[
+            assistantMessage("answer", {
+              sources: [
+                {
+                  documentId: "11111111-2222-3333-4444-555555555555",
+                  filename: "a.pdf",
+                  score: 0.0163,
+                  snippet: "기밀-본문-발췌-내용",
+                  page: null,
+                },
+              ],
+            }),
+          ]}
+        />,
+      );
+
+      const rowElement = screen.getByTestId("message-a1").closest("li")!;
+      const row = within(rowElement);
+      expect(row.queryByText(/기밀-본문-발췌-내용/)).not.toBeInTheDocument();
+      expect(row.queryByText(/0\.0163/)).not.toBeInTheDocument();
+      expect(row.queryByText(/11111111-2222-3333-4444-555555555555/)).not.toBeInTheDocument();
+      // review 2026-08-31 round-2 security Low-2: `queryByText` only inspects text nodes and
+      // would miss a leak via an attribute (e.g. `title={source.snippet}`, `aria-label`,
+      // `data-*`) -- checking the row's full serialized markup closes that gap.
+      expect(rowElement.outerHTML).not.toContain("기밀-본문-발췌-내용");
+      expect(rowElement.outerHTML).not.toContain("0.0163");
+      expect(rowElement.outerHTML).not.toContain("11111111-2222-3333-4444-555555555555");
+    });
+
+    // Security (hybrid-rag Spec T15 review Low-1): filename/snippet reach the wire unescaped
+    // -- this must render as an inert text node, never live markup.
+    it("never renders a source filename containing HTML as live DOM (XSS guard)", () => {
+      render(
+        <MessageList
+          messages={[
+            assistantMessage("answer", {
+              sources: [
+                {
+                  documentId: "d1",
+                  filename: '<img src=x onerror="window.__sourcePwned = true">',
+                  score: 0.01,
+                  snippet: "s",
+                  page: null,
+                },
+              ],
+            }),
+          ]}
+        />,
+      );
+
+      expect(document.querySelector("img")).toBeNull();
+      expect((window as unknown as { __sourcePwned?: boolean }).__sourcePwned).toBeUndefined();
+      expect(
+        screen.getByText('<img src=x onerror="window.__sourcePwned = true">'),
+      ).toBeInTheDocument();
+    });
+  });
 });

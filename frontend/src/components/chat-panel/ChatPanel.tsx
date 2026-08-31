@@ -114,6 +114,7 @@ export function ChatPanel({
       role: "assistant",
       content: "",
       streamStatus: "streaming",
+      sources: null,
     };
 
     setMessages((prev) => [...prev, userMessage, assistantMessage]);
@@ -124,9 +125,21 @@ export function ChatPanel({
     activeStreamController.current = controller;
 
     let lastFinishReason: string | null = null;
+    // hybrid-rag Spec AC-21: tracks the last non-null `sources` seen across the whole stream,
+    // mirroring `lastFinishReason` above -- but unlike `finishReason`, a still-null value here
+    // after the loop ends is a real, distinct state (BL-019 delivery failure, clause ③), not
+    // "no chunk happened to carry one yet". Never read mid-loop; only meaningful once the
+    // stream has closed (the `for await` below exits), matching {@link streamAssistantReply}'s
+    // own "completion is `done`, not `finishReason`" rule.
+    let lastSources: ChatMessage["sources"] = null;
     try {
       for await (const chunk of streamAssistantReply(conversationId, text, { signal: controller.signal, model })) {
         if (chunk.finishReason !== null) lastFinishReason = chunk.finishReason;
+        // `Array.isArray`, not `!== null` (review 2026-08-31 Low-1) -- a chunk missing the
+        // `sources` key entirely parses to `undefined`, which `!== null` would treat as a
+        // real update and overwrite an already-received array back to `undefined`, silently
+        // discarding real citations mid-stream.
+        if (Array.isArray(chunk.sources)) lastSources = chunk.sources;
         if (chunk.delta) {
           const delta = chunk.delta;
           updateAssistantMessage(assistantId, (m) => ({ ...m, content: m.content + delta }));
@@ -135,13 +148,21 @@ export function ChatPanel({
       updateAssistantMessage(assistantId, (m) => ({
         ...m,
         streamStatus: isErrorFinish(lastFinishReason) ? "error" : "done",
+        sources: lastSources,
       }));
     } catch (err: unknown) {
       if (isAbortError(err)) return; // intentional cancel (unmount) -- not a failure to report
+      // `sources: lastSources` here too (review 2026-08-31 round-2 correctness Low-2) -- a
+      // chunk carrying real citations can arrive before a later chunk throws, so this must not
+      // unconditionally discard back to `null`: whatever was actually received survives (clause
+      // ②), and only a genuinely empty-handed stream falls through to clause ③'s "출처를
+      // 불러오지 못했습니다." (deliberate either way, not redundant with the content-level error
+      // text above it -- one says the reply itself failed, the other reports the citation data).
       updateAssistantMessage(assistantId, (m) => ({
         ...m,
         content: m.content === "" ? "메시지를 가져오지 못했습니다." : `${m.content}\n\n(연결이 끊어졌습니다)`,
         streamStatus: "error",
+        sources: lastSources,
       }));
     } finally {
       if (activeStreamController.current === controller) activeStreamController.current = null;

@@ -68,3 +68,74 @@
 .markdown code {
   font-family: var(--app-type-mono);
 }
+
+/* Citation area (hybrid-rag Spec AC-18/AC-20/AC-21) -- --app-line-soft divider mirrors the
+   prototype chat blob's SourceList block (margin-top:22px;padding-top:16px;border-top). */
+.sources {
+  margin-top: var(--app-gap-md);
+  padding-top: var(--app-gap-sm);
+  border-top: 1px solid var(--app-line-soft);
+}
+
+.sourcesHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-xs);
+  margin-bottom: var(--app-gap-sm);
+}
+
+.sourcesLabel {
+  font-size: var(--app-type-meta-size);
+  font-weight: bold;
+  color: var(--app-text);
+}
+
+.sourcesCount {
+  font-size: var(--app-type-label-size);
+  color: var(--app-text-muted);
+}
+
+.sourceItems {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--app-gap-sm);
+  list-style: none;
+}
+
+.sourceItem {
+  padding: var(--app-gap-xs) var(--app-gap-sm);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-pill);
+  background: var(--app-surface);
+  font-size: var(--app-type-meta-size);
+  color: var(--app-text-body);
+}
+
+/* AC-20 -- confirmed-empty sources. Matches the prototype's showNoSource block: dashed
+   --app-line-strong border, neutral (not danger) tone. */
+.sourcesEmpty {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-sm);
+  padding: var(--app-gap-sm) var(--app-gap-md);
+  border: 1px dashed var(--app-line-strong);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-bg-sunken);
+  color: var(--app-text-muted);
+  font-size: var(--app-type-meta-size);
+}
+
+/* AC-21 clause (3) -- delivery failure (BL-019), not a confirmed answer. Deliberately a
+   different (solid, danger-toned) treatment from .sourcesEmpty above -- see SourceList's own
+   [Rationale]: a wire defect must never look like "no evidence found". */
+.sourcesFailed {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-sm);
+  padding: var(--app-gap-sm) var(--app-gap-md);
+  border: 1px solid var(--app-status-danger);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-status-danger-wash);
+  color: var(--app-status-danger);
+  font-size: var(--app-type-meta-size);
+}
