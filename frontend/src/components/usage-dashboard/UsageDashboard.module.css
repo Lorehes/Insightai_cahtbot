@@ -1,0 +1,328 @@
+/* eval-usage-dashboard card U3: admin usage dashboard screen. Tokens only, no hardcoded
+   colors/spacing/radius/font-size (design-system:AC-10/AC-11) -- mirrors
+   `document-manager/DocumentManager.module.css`'s own token discipline for the same shared
+   /admin shell. There is no dedicated "warn" status token in globals.css (only
+   --app-status-danger / --app-status-danger-wash exist), so .metricCardWarn/.warningBanner
+   reuse those danger tokens -- the same visual language this screen's own error banner and
+   `DocumentManager`'s row-error indicator already use for "something needs attention". */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap-lg);
+  max-width: var(--app-answer-max);
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap-xs);
+}
+
+.header h1 {
+  font-size: var(--app-type-page-size);
+  font-weight: var(--app-type-page-weight);
+}
+
+.description {
+  color: var(--app-text-muted);
+  font-size: var(--app-type-meta-size);
+}
+
+.filterBar {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--app-gap);
+  padding: var(--app-gap-lg);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+}
+
+.dateField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap-xs);
+  font-size: var(--app-type-label-size);
+  font-weight: var(--app-type-label-weight);
+  color: var(--app-text-muted);
+}
+
+.dateField input {
+  padding: var(--app-gap-sm) var(--app-gap-md);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-xs);
+  background: var(--app-surface);
+  color: var(--app-text);
+  font: inherit;
+  font-size: var(--app-type-body-size);
+}
+
+.dateField input:focus-visible {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+.dateSeparator {
+  padding-bottom: var(--app-gap-sm);
+  color: var(--app-text-faint);
+}
+
+.presets {
+  display: flex;
+  gap: var(--app-gap-xs);
+}
+
+.presetButton,
+.presetButtonActive {
+  padding: var(--app-gap-sm) var(--app-gap-md);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-xs);
+  background: var(--app-surface);
+  color: var(--app-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--app-type-body-size);
+}
+
+.presetButtonActive {
+  border-color: var(--app-text);
+  background: var(--app-bg-sunken);
+  color: var(--app-text);
+  font-weight: 600;
+}
+
+.presetButton:focus-visible,
+.presetButtonActive:focus-visible {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+.applyButton {
+  margin-left: auto;
+  padding: var(--app-gap-sm) var(--app-gap-lg);
+  border: 0;
+  border-radius: var(--app-radius-xs);
+  background: var(--app-accent);
+  color: var(--app-text-inverse);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--app-type-body-size);
+  font-weight: 600;
+}
+
+.applyButton:hover {
+  background: var(--app-accent-press);
+}
+
+.applyButton:focus-visible {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+.loadingState .skeletonGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: var(--app-gap);
+}
+
+.skeletonCard {
+  height: 132px;
+  border-radius: var(--app-radius-md);
+  background: linear-gradient(
+    90deg,
+    var(--app-surface-strong),
+    var(--app-surface-hover),
+    var(--app-surface-strong)
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.errorState,
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--app-gap-xs);
+  padding: var(--app-gap-lg);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+}
+
+.errorState h2,
+.emptyState h2 {
+  font-size: var(--app-type-section-size);
+  font-weight: var(--app-type-section-weight);
+}
+
+.errorState p,
+.emptyState p {
+  color: var(--app-text-muted);
+}
+
+.retryButton {
+  align-self: flex-start;
+  padding: var(--app-gap-sm) var(--app-gap-md);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-xs);
+  background: var(--app-surface);
+  color: var(--app-text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.retryButton:focus-visible {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: var(--app-gap);
+  margin-bottom: var(--app-gap-lg);
+}
+
+.metricCard,
+.metricCardWarn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap-xs);
+  padding: var(--app-gap-lg);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+}
+
+.metricCardWarn {
+  border-color: var(--app-status-danger);
+  background: var(--app-status-danger-wash);
+}
+
+.metricLabel {
+  font-size: var(--app-type-label-size);
+  font-weight: var(--app-type-label-weight);
+  color: var(--app-text-muted);
+}
+
+.metricCardWarn .metricLabel {
+  color: var(--app-status-danger);
+}
+
+.metricValue {
+  font-size: var(--app-type-section-size);
+  font-weight: 700;
+  color: var(--app-text);
+}
+
+.metricCardWarn .metricValue {
+  color: var(--app-status-danger);
+}
+
+.metricUnit {
+  font-size: var(--app-type-meta-size);
+  font-weight: 400;
+  color: var(--app-text-muted);
+}
+
+.metricHint {
+  font-size: var(--app-type-meta-size);
+  color: var(--app-text-faint);
+}
+
+.warningBanner {
+  display: flex;
+  gap: var(--app-gap-sm);
+  padding: var(--app-gap-md);
+  margin-bottom: var(--app-gap-lg);
+  border: 1px solid var(--app-status-danger);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-status-danger-wash);
+  color: var(--app-status-danger);
+}
+
+.warningBanner p {
+  margin: 0;
+  font-size: var(--app-type-meta-size);
+  line-height: 1.6;
+}
+
+.tableHeading {
+  margin-bottom: var(--app-gap-md);
+  font-size: var(--app-type-section-size);
+  font-weight: var(--app-type-section-weight);
+}
+
+.tableWrap {
+  overflow: hidden;
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: var(--app-gap-sm) var(--app-gap-md);
+  border-bottom: 1px solid var(--app-line-soft);
+  text-align: left;
+  font-size: var(--app-type-body-size);
+}
+
+.table thead tr {
+  background: var(--app-bg-sunken);
+}
+
+.table th {
+  font-size: var(--app-type-label-size);
+  font-weight: var(--app-type-label-weight);
+  color: var(--app-text-muted);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.alignRight {
+  text-align: right;
+}
+
+.modelCell {
+  font-family: var(--app-type-mono);
+  font-size: var(--app-type-code-size);
+  color: var(--app-text);
+}
+
+.rangeLabel {
+  margin-top: var(--app-gap-md);
+  color: var(--app-text-faint);
+  font-size: var(--app-type-meta-size);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
