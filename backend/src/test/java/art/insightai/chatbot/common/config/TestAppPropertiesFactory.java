@@ -97,7 +97,7 @@ public final class TestAppPropertiesFactory {
                 new AppProperties.Rerank(false, "cohere/rerank-v3.5", Duration.ofSeconds(5), Duration.ofSeconds(10));
         private AppProperties.Ingest ingest = new AppProperties.Ingest(
                 System.getProperty("java.io.tmpdir"), DataSize.ofMegabytes(20),
-                List.of("text/plain"), 2000, 500, 100);
+                List.of("text/plain"), 2000, 500, 100, Duration.ofSeconds(30));
         private AppProperties.Session session = new AppProperties.Session(1000, 50, 200);
         private AppProperties.Models models = validModels();
         private AppProperties.Chat chat = new AppProperties.Chat(new AppProperties.Chat.Memory(40));

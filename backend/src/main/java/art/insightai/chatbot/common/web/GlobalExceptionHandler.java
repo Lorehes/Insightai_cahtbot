@@ -4,6 +4,8 @@ import art.insightai.chatbot.chat.domain.ConversationNotFoundException;
 import art.insightai.chatbot.chat.domain.ConversationQuotaExceededException;
 import art.insightai.chatbot.chat.domain.InvalidModelException;
 import art.insightai.chatbot.chat.domain.MessageQuotaExceededException;
+import art.insightai.chatbot.rag.domain.DocumentDeleteLockTimeoutException;
+import art.insightai.chatbot.rag.domain.DocumentNotFoundException;
 import art.insightai.chatbot.rag.domain.DocumentQuotaExceededException;
 import art.insightai.chatbot.rag.domain.DocumentTooLargeException;
 import art.insightai.chatbot.rag.domain.InvalidDocumentFilenameException;
@@ -63,7 +65,17 @@ import java.util.List;
  *   separate, length-capped {@code ProblemDetail} property instead. {@link
  *   InvalidUsagePeriodException} maps to 400 (eval-usage-dashboard:AC-15, Tech Review D-8) and,
  *   like {@link InvalidModelException} above, echoes {@code e.getMessage()} verbatim — see that
- *   class's own [Caution] for why embedding {@code from}/{@code to} is safe.
+ *   class's own [Caution] for why embedding {@code from}/{@code to} is safe. {@link
+ *   DocumentNotFoundException} maps to 404, same shape as {@link ConversationNotFoundException}
+ *   above (document-ingestion:AC-13, Tech Review T10) — it also echoes {@code e.getMessage()}
+ *   verbatim, safe for the same reason {@link ConversationNotFoundException} is: the id it embeds
+ *   is the same id the caller already supplied in the request path. {@link
+ *   DocumentDeleteLockTimeoutException} maps to 503 (document-ingestion:AC-17, review
+ *   2026-08-30 T10 round 3, Medium-1) -- {@code DELETE /api/admin/documents/{id}} throws it
+ *   when {@code DocumentIngestLockRegistry#tryLock} times out, and it echoes {@code
+ *   e.getMessage()} verbatim for the same id-only reason as {@link DocumentNotFoundException}
+ *   just above; see that exception class's own [Rationale] for why 503 is kept distinct from
+ *   both the 404 case and AC-18's orphan-cleanup response.
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -179,6 +191,23 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DocumentQuotaExceededException.class)
     public ProblemDetail handleDocumentQuotaExceeded(DocumentQuotaExceededException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, DOCUMENT_QUOTA_EXCEEDED_CLIENT_MESSAGE);
+    }
+
+    @ExceptionHandler(DocumentNotFoundException.class)
+    public ProblemDetail handleDocumentNotFound(DocumentNotFoundException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+    }
+
+    /**
+     * [Purpose] Maps {@link DocumentDeleteLockTimeoutException} to 503.
+     * [Rationale] See that exception class's own [Rationale] for why 503 -- not 404 or a
+     *   silent-success shape -- is the right status for "the per-document lock could not be
+     *   acquired within {@code AppProperties.Ingest#deleteLockTimeout}" (document-ingestion:AC-17,
+     *   review 2026-08-30 T10 round 3, Medium-1).
+     */
+    @ExceptionHandler(DocumentDeleteLockTimeoutException.class)
+    public ProblemDetail handleDocumentDeleteLockTimeout(DocumentDeleteLockTimeoutException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
     }
 
     @ExceptionHandler(InvalidUsagePeriodException.class)

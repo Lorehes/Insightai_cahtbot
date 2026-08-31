@@ -111,7 +111,7 @@ class DocumentIngestionPipelineStateMachineTest {
     private DocumentIngestionPipeline pipeline() {
         return new DocumentIngestionPipeline(documentRepository, statusTransitioner, documentParser,
                 documentChunker, chunkMetadataBuilder, chunkIndexer, chunkRepository,
-                appProperties());
+                appProperties(), new DocumentIngestLockRegistry());
     }
 
     private AppProperties appProperties() {
@@ -119,7 +119,8 @@ class DocumentIngestionPipelineStateMachineTest {
         return TestAppPropertiesFactory.builder()
                 .ingest(new AppProperties.Ingest(uploadDir.toString(), defaults.maxFileSize(),
                         defaults.allowedMimeTypes(), defaults.chunkSize(),
-                        defaults.minChunkSizeChars(), defaults.maxDocumentCount()))
+                        defaults.minChunkSizeChars(), defaults.maxDocumentCount(),
+                        defaults.deleteLockTimeout()))
                 .build();
     }
 

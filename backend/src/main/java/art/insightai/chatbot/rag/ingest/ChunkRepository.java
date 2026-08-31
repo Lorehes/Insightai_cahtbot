@@ -16,6 +16,12 @@ import org.springframework.stereotype.Repository;
  *   already use to define correctness: {@code metadata->>'document_id'}. This class is the
  *   single shared place both T8 (failure compensation delete) and T10 (document delete
  *   endpoint) call into, so that predicate is written exactly once.
+ *   {@link #deleteOrphaned} (document-ingestion:AC-18, review 2026-08-30 T10 High-1,
+ *   user-approved fix 2) is a separate, narrower predicate — it does not scope to one document
+ *   id at all, but to every chunk whose {@code document_id} no longer has a matching {@code
+ *   documents} row, the cleanup that removes any orphan {@link DocumentIngestLockRegistry}'s
+ *   AC-17 fix did not already prevent (rows created before this card, or created by any bug this
+ *   card's own fix does not anticipate).
  * [Caution] {@code vector_store_bgem3.metadata} is a plain {@code json} column (not
  *   {@code jsonb}, per {@code V1__init.sql} — {@code PgVectorStore}'s own default schema), and
  *   {@code document_id} is stored as the string form of a UUID inside it. Callers must not pass
@@ -34,6 +40,20 @@ public class ChunkRepository {
 
     private static final String DELETE_BY_DOCUMENT_ID_SQL =
             "DELETE FROM vector_store_bgem3 WHERE metadata->>'document_id' = ?";
+
+    /**
+     * [Rationale] {@code NOT EXISTS} rather than {@code NOT IN (SELECT id::text FROM documents)}:
+     *   a plain {@code NOT IN} against a subquery is null-poisoned in standard SQL -- if any
+     *   {@code documents.id} could ever be read back null the whole {@code NOT IN} would then
+     *   match nothing -- and {@code NOT EXISTS} does not have that failure mode. The {@code
+     *   metadata->>'document_id' IS NOT NULL} guard excludes the (currently unreachable, per
+     *   {@link ChunkMetadataBuilder}) case of a chunk with no {@code document_id} key at all from
+     *   being treated as orphaned by this predicate.
+     */
+    private static final String DELETE_ORPHANED_SQL =
+            "DELETE FROM vector_store_bgem3 v "
+            + "WHERE v.metadata->>'document_id' IS NOT NULL "
+            + "AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id::text = v.metadata->>'document_id')";
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -61,5 +81,20 @@ public class ChunkRepository {
      */
     public int deleteByDocumentId(UUID documentId) {
         return jdbcTemplate.update(DELETE_BY_DOCUMENT_ID_SQL, documentId.toString());
+    }
+
+    /**
+     * [Purpose] Deletes every chunk row in {@code vector_store_bgem3} whose {@code document_id}
+     *   has no matching {@code documents} row, and returns how many rows were removed.
+     * [Rationale] Backs {@code POST /api/admin/documents/orphan-chunks/cleanup}
+     *   (document-ingestion:AC-18, review 2026-08-30 T10 High-1, user-approved fix 2) -- the
+     *   sweep for chunks {@link DocumentIngestLockRegistry}'s AC-17 fix did not prevent because
+     *   they either predate this card or were produced by an interleaving the fix does not cover
+     *   (see class-level [Rationale] for the predicate itself).
+     * [Side effects] Permanently removes rows from {@code vector_store_bgem3}; the caller owns
+     *   the transaction boundary, same as {@link #deleteByDocumentId}.
+     */
+    public int deleteOrphaned() {
+        return jdbcTemplate.update(DELETE_ORPHANED_SQL);
     }
 }

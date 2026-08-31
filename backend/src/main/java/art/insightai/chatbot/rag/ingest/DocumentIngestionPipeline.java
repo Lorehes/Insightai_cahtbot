@@ -64,7 +64,23 @@ import art.insightai.chatbot.rag.domain.DocumentStatus;
  *   {@link ChunkIndexer} calls are sequential. It is also safe to call directly (synchronously)
  *   from a test, which is the intended way to verify the pipeline's behaviour without racing the
  *   executor.
- * [AC] document-ingestion:AC-5, document-ingestion:AC-6, document-ingestion:AC-7
+ *   <p>
+ *   <b>The chunk-commit step is guarded by {@link DocumentIngestLockRegistry} (document-ingestion
+ *   :AC-17, review 2026-08-30 T10 High-1, user-approved fix 1).</b> {@link #ingest} holds that
+ *   id's mutex from just before {@link ChunkIndexer#index} through {@link
+ *   DocumentStatusTransitioner#markIndexed}, the same mutex {@link DocumentDeleteService#delete}
+ *   holds for its own critical section -- see that class's Javadoc [Caution]. If a concurrent
+ *   delete already removed the {@code documents} row by the time this method's chunk insert
+ *   finishes, it discards the chunks it just wrote and returns without touching {@code
+ *   documents.status}, rather than leaving an orphan or calling {@link
+ *   DocumentStatusTransitioner#markFailed} against a row that no longer exists. This closes the
+ *   race the old review found: previously the delete could commit "0 chunks removed" while this
+ *   method was still between parsing and indexing, and this method would then insert chunk rows
+ *   for an id {@code documents} no longer had -- rows the search-exclusion device ({@code
+ *   NonIndexedDocumentLookup}) cannot filter because it only excludes a row that exists but is
+ *   not INDEXED, not a chunk whose document row is entirely absent.
+ * [AC] document-ingestion:AC-5, document-ingestion:AC-6, document-ingestion:AC-7,
+ *   document-ingestion:AC-17
  */
 @Service
 public class DocumentIngestionPipeline {
@@ -109,6 +125,7 @@ public class DocumentIngestionPipeline {
     private final ChunkIndexer chunkIndexer;
     private final ChunkRepository chunkRepository;
     private final AppProperties appProperties;
+    private final DocumentIngestLockRegistry ingestLockRegistry;
 
     public DocumentIngestionPipeline(DocumentRepository documentRepository,
                                      DocumentStatusTransitioner statusTransitioner,
@@ -117,7 +134,8 @@ public class DocumentIngestionPipeline {
                                      ChunkMetadataBuilder chunkMetadataBuilder,
                                      ChunkIndexer chunkIndexer,
                                      ChunkRepository chunkRepository,
-                                     AppProperties appProperties) {
+                                     AppProperties appProperties,
+                                     DocumentIngestLockRegistry ingestLockRegistry) {
         this.documentRepository = documentRepository;
         this.statusTransitioner = statusTransitioner;
         this.documentParser = documentParser;
@@ -126,6 +144,7 @@ public class DocumentIngestionPipeline {
         this.chunkIndexer = chunkIndexer;
         this.chunkRepository = chunkRepository;
         this.appProperties = appProperties;
+        this.ingestLockRegistry = ingestLockRegistry;
     }
 
     /**
@@ -140,8 +159,14 @@ public class DocumentIngestionPipeline {
      *   since the T8 rework it is caught and logged one frame up, by
      *   {@code DocumentUploadedEventListener}'s task wrapper, rather than by Spring's async
      *   uncaught-exception handler (that handler no longer sits on this path -- the listener
-     *   submits to {@code ingestExecutor} explicitly instead of using {@code @Async}).
-     * [AC] document-ingestion:AC-5, document-ingestion:AC-6, document-ingestion:AC-7
+     *   submits to {@code ingestExecutor} explicitly instead of using {@code @Async}). One
+     *   additional outcome since AC-17: if a concurrent delete removed the document's row while
+     *   this method held the {@link DocumentIngestLockRegistry} mutex for its chunk-commit step,
+     *   it returns having discarded its own just-inserted chunks and having changed no {@code
+     *   documents} row at all -- neither INDEXED nor FAILED, because there is no row left to
+     *   update.
+     * [AC] document-ingestion:AC-5, document-ingestion:AC-6, document-ingestion:AC-7,
+     *   document-ingestion:AC-17
      */
     public void ingest(UUID documentId) {
         Optional<Document> found = documentRepository.findById(documentId);
@@ -167,15 +192,33 @@ public class DocumentIngestionPipeline {
 
             clientErrorMessage = INDEX_FAILURE_MESSAGE;
             statusTransitioner.transitionTo(documentId, DocumentStatus.EMBEDDING);
-            chunkIndexer.index(chunks);
 
-            int indexedChunkCount = chunkRepository.countByDocumentId(documentId);
-            if (indexedChunkCount < 1) {
-                clientErrorMessage = EMPTY_INDEX_FAILURE_MESSAGE;
-                throw new IllegalStateException(
-                        "Document " + documentId + " has no indexed chunk after indexing");
+            ingestLockRegistry.lock(documentId);
+            try {
+                chunkIndexer.index(chunks);
+
+                if (documentRepository.findById(documentId).isEmpty()) {
+                    // AC-17: a concurrent DocumentDeleteService#delete removed this document's row
+                    // while we were between EMBEDDING and this point. Discard the chunks this run
+                    // just inserted -- leaving them would orphan them, exactly the state
+                    // NonIndexedDocumentLookup cannot filter -- and skip the status update
+                    // entirely; there is no row left to mark either INDEXED or FAILED.
+                    int discarded = chunkRepository.deleteByDocumentId(documentId);
+                    log.warn("색인 완료 직전 문서가 삭제되어 커밋을 포기함 (documentId={}, discardedChunks={})",
+                            documentId, discarded);
+                    return;
+                }
+
+                int indexedChunkCount = chunkRepository.countByDocumentId(documentId);
+                if (indexedChunkCount < 1) {
+                    clientErrorMessage = EMPTY_INDEX_FAILURE_MESSAGE;
+                    throw new IllegalStateException(
+                            "Document " + documentId + " has no indexed chunk after indexing");
+                }
+                statusTransitioner.markIndexed(documentId, indexedChunkCount);
+            } finally {
+                ingestLockRegistry.unlock(documentId);
             }
-            statusTransitioner.markIndexed(documentId, indexedChunkCount);
         } catch (RuntimeException e) {
             log.error("문서 인제스천 실패 (documentId={}, errorMessage={})",
                     documentId, clientErrorMessage, e);

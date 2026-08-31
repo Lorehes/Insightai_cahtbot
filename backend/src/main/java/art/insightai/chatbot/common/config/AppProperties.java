@@ -108,6 +108,18 @@ public record AppProperties(
      *   (review 2026-08-25, Medium-2, user-approved fix). 100 is a demo-scale ceiling: generous
      *   for the current corpus, not unlimited. This field only defines the limit; T5's upload
      *   endpoint is responsible for counting {@code documents} rows and enforcing it.
+     *   {@code deleteLockTimeout} bounds how long {@code DocumentDeleteService#delete} waits on
+     *   {@code DocumentIngestLockRegistry#tryLock} before giving up (document-ingestion T10
+     *   review 2026-08-30 round 3, Medium-1) — a plain {@code ReentrantLock#lock()} would park the
+     *   request thread handling {@code DELETE /api/admin/documents/{id}} indefinitely if a
+     *   same-stripe ingestion's embedding round-trip stalls, which is itself an unauthenticated
+     *   attack surface one resource over from AC-17's own concern. 30 seconds is a demo-scale
+     *   placeholder, not a measured number: it is meant to comfortably exceed one embedding
+     *   round-trip for a single chunk batch under normal OpenRouter latency, the same
+     *   "generous, not tuned" spirit as {@code Rerank.connectTimeout}/{@code readTimeout} above.
+     *   On expiry {@code DocumentDeleteService#delete} throws {@code
+     *   DocumentDeleteLockTimeoutException}, mapped to 503 — deliberately distinct from AC-18's
+     *   orphan-cleanup endpoint, which means "no row to clean up", not "busy right now".
      */
     public record Ingest(
             String uploadDir,
@@ -122,7 +134,8 @@ public record AppProperties(
             }) List<String> allowedMimeTypes,
             @DefaultValue("2000") int chunkSize,
             @DefaultValue("500") int minChunkSizeChars,
-            @DefaultValue("100") int maxDocumentCount
+            @DefaultValue("100") int maxDocumentCount,
+            @DefaultValue("30s") Duration deleteLockTimeout
     ) {
         public Ingest {
             if (uploadDir == null || uploadDir.isBlank()) {

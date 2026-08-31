@@ -30,6 +30,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
 
@@ -393,7 +394,8 @@ class DocumentUploadServiceTest {
                 List.of(ALLOWED_MIME_TYPE, "application/pdf"),
                 2000,
                 500,
-                100);
+                100,
+                Duration.ofSeconds(30));
     }
 
     private AppProperties appProperties(AppProperties.Ingest ingest) {
@@ -402,24 +404,24 @@ class DocumentUploadServiceTest {
 
     /**
      * [Purpose] Test-local helpers so each case only restates the one field it varies, instead of
-     *   repeating {@link AppProperties.Ingest}'s full 6-argument constructor inline.
+     *   repeating {@link AppProperties.Ingest}'s full 7-argument constructor inline.
      */
     private AppProperties.Ingest ingestWithMaxFileSize(DataSize maxFileSize) {
         AppProperties.Ingest base = defaultIngest();
         return new AppProperties.Ingest(base.uploadDir(), maxFileSize, base.allowedMimeTypes(),
-                base.chunkSize(), base.minChunkSizeChars(), base.maxDocumentCount());
+                base.chunkSize(), base.minChunkSizeChars(), base.maxDocumentCount(), base.deleteLockTimeout());
     }
 
     private AppProperties.Ingest ingestWithMaxDocumentCount(int maxDocumentCount) {
         AppProperties.Ingest base = defaultIngest();
         return new AppProperties.Ingest(base.uploadDir(), base.maxFileSize(), base.allowedMimeTypes(),
-                base.chunkSize(), base.minChunkSizeChars(), maxDocumentCount);
+                base.chunkSize(), base.minChunkSizeChars(), maxDocumentCount, base.deleteLockTimeout());
     }
 
     private AppProperties.Ingest ingestWithUploadDir(String uploadDirOverride) {
         AppProperties.Ingest base = defaultIngest();
         return new AppProperties.Ingest(uploadDirOverride, base.maxFileSize(), base.allowedMimeTypes(),
-                base.chunkSize(), base.minChunkSizeChars(), base.maxDocumentCount());
+                base.chunkSize(), base.minChunkSizeChars(), base.maxDocumentCount(), base.deleteLockTimeout());
     }
 
     /**

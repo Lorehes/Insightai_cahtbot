@@ -130,6 +130,7 @@ app:
     chunk-size: 2000           # §7 OQ-1 확정값. TokenTextSplitter 는 overlap 파라미터가 없다
     min-chunk-size-chars: 500
     max-document-count: 100    # 무인증 업로드 API 의 누적 총량 상한. 초과 시 거부는 T5 소관 (review 2026-08-25 Medium-2)
+    delete-lock-timeout: 30s   # DELETE 요청이 삭제/인제스천 스트라이프 락을 기다리는 상한. 초과 시 503 (review 2026-08-30 T10 round 3, Medium-1)
   session:
     # anonymous auth_provider 행의 누적 총량 상한. 쿠키 없음/손상/미확인 값이 오면 매 요청이
     # 신규 행을 만들 수 있어(chat:AC-9/12) 크롤러·스캐너에 users 테이블이 무제한으로 자랄 수
