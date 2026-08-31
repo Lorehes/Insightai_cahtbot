@@ -1,0 +1,19 @@
+/* design-system D6: list-cell primitives. Containment declarations per Spec §Tech Review
+   AD-8 -- span is inline, so `display: block` is required for `overflow: hidden` to actually
+   clip; `overflow-wrap: break-word`-family is deliberately NOT used on .truncated (255 Korean
+   chars would wrap into many lines instead of clipping to one). Column-width constraints
+   (table-layout, header width) are document-ingestion T11's job, not this file's (AD-8(c)). */
+
+.truncated {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.errorMessage {
+  color: var(--app-status-danger);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

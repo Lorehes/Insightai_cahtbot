@@ -1,0 +1,32 @@
+/* design-system D5: status badge primitive. Tokens only, per Spec §2 status mapping table --
+   no hardcoded colors/spacing. */
+
+.pending,
+.parsing,
+.embedding,
+.indexed,
+.failed {
+  display: inline-block;
+  border-radius: var(--app-radius-pill);
+  padding: var(--app-gap-xs) var(--app-gap-sm);
+  font-size: var(--app-type-label-size);
+  font-weight: var(--app-type-label-weight);
+}
+
+.pending {
+  color: var(--app-status-neutral);
+}
+
+.parsing,
+.embedding {
+  color: var(--app-status-active);
+}
+
+.indexed {
+  color: var(--app-status-ok);
+}
+
+.failed {
+  color: var(--app-status-danger);
+  background: var(--app-status-danger-wash);
+}

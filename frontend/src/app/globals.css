@@ -1,19 +1,116 @@
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-  /* F1 최소 확인 화면 전용 placeholder 토큰. 정식 디자인 시스템(색상 팔레트·간격 스케일)은
-     F2/F3에서 결정한다 -- 여기서는 이 카드의 최소 확인 화면에 필요한 만큼만 정의했다. */
-  --space-sm: 0.5rem;
-  --space-md: 1rem;
-  --color-border: #d4d4d4;
-}
+/* insight-chat -- application token layer (design-system D2)
+   Ported from `insight-chat 프로토타입.html`'s single <style> `:root` block (Spec §Tech
+   Review AD-1) -- base layer first, app layer second (AD-1(d)). Only tokens this app's three
+   screens actually reference are ported (AD-2); the prototype's larger Airbnb token set
+   (--color-luxe, --color-star, --gradient-primary, etc.) is intentionally left out -- porting
+   them would leave dead tokens behind, the same problem AC-8 guards against for font
+   variables.
+   Change a value here and every screen follows. */
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-    --color-border: #3a3a3a;
-  }
+:root {
+  /* ===== Base layer -- literal values, ported verbatim from the prototype ===== */
+
+  --color-primary: #ff385c;
+  --color-primary-active: #e00b41;
+  --color-ink: #222222;
+  --color-body: #3f3f3f;
+  --color-muted: #6a6a6a;
+  --color-muted-soft: #929292;
+  --color-on-primary: #ffffff;
+  --color-canvas: #ffffff;
+  --color-surface-soft: #f7f7f7;
+  --color-surface-strong: #f2f2f2;
+  --color-surface-card: #ffffff;
+  --color-hairline: #dddddd;
+  --color-hairline-soft: #ebebeb;
+  --color-border-strong: #c1c1c1;
+  --color-error: #c13515;
+
+  --space-xxs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-base: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-xxl: 48px;
+  --space-section: 64px;
+
+  --radius-none: 0px;
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 32px;
+  --radius-full: 9999px;
+
+  --shadow-card: rgba(0,0,0,0.02) 0 0 0 1px, rgba(0,0,0,0.04) 0 2px 6px 0, rgba(0,0,0,0.1) 0 4px 8px 0;
+
+  /* design-system:AC-4 -- system stack, Pretendard first. The prototype's licensed 'Airbnb
+     Cereal VF'/'Circular' entries are dropped: they are not self-hosted here (coordinator
+     decision 2026-08-28, user notified, Spec §4 AC-4). */
+  --font-sans: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  /* ===== App layer -- aliases only (design-system:AC-5). The only values below that are not
+     `var(...)` are the 3 literal colors, 16 --app-type-* typography tokens, and 4 fixed
+     layout widths Spec §Tech Review AD-4 names as exceptions. ===== */
+
+  --app-font: var(--font-sans);
+  --app-type-page-size: 28px;    --app-type-page-weight: 700;
+  --app-type-section-size: 20px; --app-type-section-weight: 600;
+  --app-type-card-size: 16px;    --app-type-card-weight: 600;
+  --app-type-body-size: 15px;    --app-type-body-weight: 400;
+  --app-type-answer-size: 16px;  --app-type-answer-lh: 1.75;
+  --app-type-meta-size: 13px;    --app-type-meta-weight: 400;
+  --app-type-label-size: 12px;   --app-type-label-weight: 600;
+  --app-type-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --app-type-code-size: 13.5px;
+
+  --app-bg: var(--color-canvas);
+  --app-bg-sunken: var(--color-surface-soft);
+  --app-surface: var(--color-surface-card);
+  --app-surface-hover: var(--color-surface-soft);
+  --app-surface-strong: var(--color-surface-strong);
+
+  --app-text: var(--color-ink);
+  --app-text-body: var(--color-body);
+  --app-text-muted: var(--color-muted);
+  --app-text-faint: var(--color-muted-soft);
+  --app-text-inverse: var(--color-on-primary);
+
+  --app-line: var(--color-hairline);
+  --app-line-soft: var(--color-hairline-soft);
+  --app-line-strong: var(--color-border-strong);
+
+  --app-accent: var(--color-primary);
+  --app-accent-press: var(--color-primary-active);
+  --app-accent-wash: rgba(255, 56, 92, 0.07);
+  --app-accent-line: rgba(255, 56, 92, 0.32);
+
+  --app-status-neutral: var(--color-muted);
+  --app-status-active: var(--color-ink);
+  --app-status-ok: var(--color-ink);
+  --app-status-danger: var(--color-error);
+  --app-status-danger-wash: rgba(193, 53, 21, 0.08);
+
+  --app-gap-xs: var(--space-xs);
+  --app-gap-sm: var(--space-sm);
+  --app-gap-md: var(--space-md);
+  --app-gap: var(--space-base);
+  --app-gap-lg: var(--space-lg);
+  --app-gap-xl: var(--space-xl);
+  --app-pad-screen: var(--space-xl);
+
+  --app-radius-xs: var(--radius-xs);
+  --app-radius-sm: var(--radius-sm);
+  --app-radius-md: var(--radius-md);
+  --app-radius-pill: var(--radius-full);
+  --app-shadow: var(--shadow-card);
+
+  --app-rail-width: 288px;
+  --app-admin-nav-width: 248px;
+  --app-answer-max: 760px;
+  --app-topbar-height: 64px;
 }
 
 html {
@@ -30,9 +127,11 @@ body {
   min-height: 100%;
   display: flex;
   flex-direction: column;
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--app-font);
+  font-size: var(--app-type-body-size);
+  font-weight: var(--app-type-body-weight);
+  color: var(--app-text);
+  background: var(--app-bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -46,10 +145,4 @@ body {
 a {
   color: inherit;
   text-decoration: none;
-}
-
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
-  }
 }

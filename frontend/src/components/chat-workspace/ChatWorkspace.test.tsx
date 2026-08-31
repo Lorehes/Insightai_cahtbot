@@ -160,6 +160,25 @@ describe("ChatWorkspace", () => {
     expect(screen.getByTestId("message-history-1")).toHaveTextContent("an internal chatbot");
   });
 
+  // review 2026-08-31 round-2 correctness Low-1: guards the seam between this component's
+  // `toChatMessages` (which does not thread a `sources` field through) and MessageList's
+  // `SourceList` -- untagged because AC-21 only regulates the immediately-post-stream screen,
+  // not history reload (hybrid-rag Spec §2 "과거 대화 이력 재조회 화면의 출처 표시" is out of
+  // scope for T15), so this is a regression guard against a false failure message, not AC
+  // evidence. See MessageList.tsx's own SourceList [Caution] for the mechanism this locks in.
+  it("never shows the citation delivery-failure message for a message loaded from conversation history", async () => {
+    mockedListConversations.mockResolvedValue([CONV_A]);
+    mockedGetMessages.mockResolvedValue([
+      { role: "user", content: "old question", createdAt: "2026-08-27T00:00:00Z" },
+      { role: "assistant", content: "old answer", createdAt: "2026-08-27T00:00:01Z" },
+    ]);
+    render(<ChatWorkspace />);
+
+    await waitForComposerReady();
+    expect(await screen.findByText("old answer")).toBeInTheDocument();
+    expect(screen.queryByText("출처를 불러오지 못했습니다.")).not.toBeInTheDocument();
+  });
+
   it("adopting an existing conversation on first load never auto-creates one (review 2026-08-29 Medium-3, re-opened)", async () => {
     // This is the exact assertion QA reported removing after confirming it failed against the
     // pre-rework code (`ChatPanel` mounted with `conversationId={undefined}` while this
@@ -276,7 +295,7 @@ describe("ChatWorkspace", () => {
 
   it("[chat:AC-39] sends the selected model id in the actual message-send request", async () => {
     mockedStreamAssistantReply.mockImplementation(() =>
-      singleChunkReply([{ conversationId: "new-conv", delta: "ok", finishReason: "STOP", usage: null }]),
+      singleChunkReply([{ conversationId: "new-conv", delta: "ok", finishReason: "STOP", usage: null, sources: null }]),
     );
     const user = userEvent.setup();
     render(<ChatWorkspace />);

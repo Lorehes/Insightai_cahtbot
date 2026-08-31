@@ -1,10 +1,12 @@
-/* F1 최소 확인 화면 전용 레이아웃. */
+/* Screen root layout. Rewired onto the --app-* token layer (design-system D4) --
+   padding uses --app-pad-screen (screen-outer margin, Spec §Tech Review AD-5 exception),
+   not --app-gap-md. */
 
 .page {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--space-md);
-  padding: var(--space-md);
+  gap: var(--app-gap-md);
+  padding: var(--app-pad-screen);
   min-height: 100vh;
 }

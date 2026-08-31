@@ -1,11 +1,10 @@
-/* Card F3 model picker. Reuses existing design tokens
-   (--space-sm/--space-md/--color-border/--foreground/--background, globals.css) --
-   no new tokens introduced, no hardcoded colors/spacing. */
+/* Card F3 model picker. Rewired onto the --app-* token layer (design-system D4) --
+   no hardcoded colors/spacing. */
 
 .field {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: var(--app-gap-sm);
 }
 
 .label {
@@ -13,16 +12,16 @@
 }
 
 .select {
-  padding: var(--space-sm);
-  border: 1px solid var(--color-border);
-  border-radius: 0.375rem;
-  background: var(--background);
-  color: var(--foreground);
+  padding: var(--app-gap-sm);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-xs);
+  background: var(--app-surface);
+  color: var(--app-text);
   font: inherit;
 }
 
 .select:focus-visible {
-  outline: 2px solid var(--foreground);
+  outline: 2px solid var(--app-text);
   outline-offset: 2px;
 }
 
@@ -31,6 +30,6 @@
 }
 
 .error {
-  color: var(--foreground);
+  color: var(--app-status-danger);
   font-weight: bold;
 }
