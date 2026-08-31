@@ -29,6 +29,15 @@ class EvalReportAggregatorTest {
                 new JudgeResult.NotFound(notFoundCorrect, hallucination));
     }
 
+    private static JudgedCase found(
+            boolean answerCorrect, boolean sourceCorrect, long latencyMs, BigDecimal costUsd,
+            int retrievedNonIndexedChunkCount, String finishReason) {
+        return new JudgedCase(
+                new EvalResponse("답변", List.of(), latencyMs, costUsd),
+                new JudgeResult.Found(answerCorrect, sourceCorrect),
+                retrievedNonIndexedChunkCount, finishReason);
+    }
+
     @Test
     @DisplayName("[eval-usage-dashboard:AC-8] 15개 found + 10개 not-found 전부 정답이면 6개 지표가 모두 채워진다")
     void aggregatesAllSixMetricsWhenEveryCaseIsCorrect() {
@@ -202,5 +211,104 @@ class EvalReportAggregatorTest {
         // then: L3, 2026-08-28 review — negative cost is treated the same as null cost
         assertThat(row.totalCostUsd()).isEqualByComparingTo(BigDecimal.valueOf(0.001));
         assertThat(row.missingCostCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("[eval-usage-dashboard:AC-19a] 제외 대상 건수 필드는 값이 있어도 판정 유보가 아니고, 회수 청크 쪽 1건은 판정 유보다 — 필드1(제외 대상)은 상태값별 건수로 표시된다")
+    void excludedByStatusIsNotDeferralButRetrievedNonIndexedChunkIs() {
+        // given: a per-run excluded-by-status snapshot with two statuses (U15's "값별 건수
+        // 표시" requirement), plus one judged case whose retrieval actually returned 1
+        // non-INDEXED chunk
+        List<JudgedCase> cases = List.of(
+                found(true, true, 100L, BigDecimal.valueOf(0.001), 1, null),
+                notFound(true, false, 80L, BigDecimal.valueOf(0.0005)));
+        List<EvalExcludedDocumentStatusCount> excludedByStatus = List.of(
+                new EvalExcludedDocumentStatusCount("FAILED", 2),
+                new EvalExcludedDocumentStatusCount("PENDING", 1));
+
+        // when
+        EvalReportRow row = EvalReportAggregator.aggregate(cases, excludedByStatus);
+
+        // then: field 1 passes through untouched and is not, by itself, a deferral reason
+        assertThat(row.excludedByStatus()).containsExactlyInAnyOrder(
+                new EvalExcludedDocumentStatusCount("FAILED", 2),
+                new EvalExcludedDocumentStatusCount("PENDING", 1));
+        // and: field 2 (1 non-INDEXED chunk actually retrieved) alone defers judgment
+        assertThat(row.retrievedNonIndexedChunkCount()).isEqualTo(1);
+        assertThat(row.judgmentDeferred()).isTrue();
+    }
+
+    @Test
+    @DisplayName("[eval-usage-dashboard:AC-20a] finish_reason 분포에 length 1건이 포함되면 판정 유보이고, null 이 별도 값으로 집계되어 행에서 누락되지 않는다")
+    void finishReasonDistributionIncludesLengthAndPreservesNullBucket() {
+        // given: 3 cases — one with a null finish reason (never recorded), one "STOP" (mixed
+        // case, as chat's ChatChunk normalization or an SDK enum constant might produce), and
+        // one "length" that must trigger judgment deferral
+        List<JudgedCase> cases = List.of(
+                found(true, true, 100L, BigDecimal.valueOf(0.001), 0, null),
+                found(true, true, 100L, BigDecimal.valueOf(0.001), 0, "STOP"),
+                found(true, true, 100L, BigDecimal.valueOf(0.001), 0, "length"));
+
+        // when
+        EvalReportRow row = EvalReportAggregator.aggregate(cases, List.of());
+
+        // then: three distinct buckets, null preserved as its own value, "STOP" lowered to "stop"
+        assertThat(row.finishReasonCounts()).containsExactlyInAnyOrder(
+                new FinishReasonCount(null, 1),
+                new FinishReasonCount("stop", 1),
+                new FinishReasonCount("length", 1));
+        assertThat(row.judgmentDeferred()).isTrue();
+    }
+
+    @Test
+    @DisplayName("[eval-usage-dashboard:AC-20a] length 가 0건이면 finish_reason 분포만으로는 판정 유보가 아니다")
+    void noLengthCaseDoesNotDeferJudgmentViaFinishReasonDistribution() {
+        // given: every case finished with "stop", none with "length"
+        List<JudgedCase> cases = List.of(
+                found(true, true, 100L, BigDecimal.valueOf(0.001), 0, "stop"),
+                found(true, true, 100L, BigDecimal.valueOf(0.001), 0, "stop"));
+
+        // when
+        EvalReportRow row = EvalReportAggregator.aggregate(cases, List.of());
+
+        // then
+        assertThat(row.finishReasonCounts()).containsExactly(new FinishReasonCount("stop", 2));
+        assertThat(row.judgmentDeferred()).isFalse();
+    }
+
+    @Test
+    @DisplayName("[eval-usage-dashboard:AC-19a] retrievedNonIndexedChunkCount 은 케이스별 개수의 총합이다 — 최댓값도 건수(0/1)도 아니다")
+    void retrievedNonIndexedChunkCountSumsAcrossMultipleContributingCases() {
+        // given: three found cases contributing 2, 3, and 0 non-INDEXED chunks respectively.
+        // The true sum (5) differs from both a cardinality mutant (count>0?1:0 -> 1+1+0=2) and a
+        // Math.max mutant (max(2,3,0)=3), so either mutation is caught here (2026-08-30 review
+        // Medium-2 — a single-contributor fixture elsewhere in this file could not distinguish
+        // "sum" from "count" or "max").
+        List<JudgedCase> cases = List.of(
+                found(true, true, 100L, BigDecimal.valueOf(0.001), 2, null),
+                found(true, true, 100L, BigDecimal.valueOf(0.001), 3, null),
+                found(true, true, 100L, BigDecimal.valueOf(0.001), 0, null));
+
+        // when
+        EvalReportRow row = EvalReportAggregator.aggregate(cases, List.of());
+
+        // then: true sum is 5, not 2 (a "did any case contribute" count) and not 3 (max)
+        assertThat(row.retrievedNonIndexedChunkCount()).isEqualTo(5);
+    }
+
+    @Test
+    @DisplayName("아무 오염 신호도 없는 판정이면 새 필드는 모두 비어 있거나 0이고 판정 유보가 아니다")
+    void aggregateOneArgOverloadYieldsNoContaminationSignals() {
+        // given: the pre-existing 1-arg overload every AC-6b/AC-8/AC-9a test in this file uses
+        List<JudgedCase> cases = List.of(found(true, true, 100L, BigDecimal.valueOf(0.001)));
+
+        // when
+        EvalReportRow row = EvalReportAggregator.aggregate(cases);
+
+        // then
+        assertThat(row.excludedByStatus()).isEmpty();
+        assertThat(row.retrievedNonIndexedChunkCount()).isZero();
+        assertThat(row.finishReasonCounts()).containsExactly(new FinishReasonCount(null, 1));
+        assertThat(row.judgmentDeferred()).isFalse();
     }
 }

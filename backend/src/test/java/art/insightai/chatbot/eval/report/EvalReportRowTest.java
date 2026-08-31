@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -96,5 +97,101 @@ class EvalReportRowTest {
         // given / when / then
         assertThatThrownBy(() -> new EvalReportRow(0, 0, 0, 0, 1, 2, 0L, BigDecimal.ZERO, 0))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("[eval-usage-dashboard:AC-19a] 제외 대상 건수 필드에 값이 있어도 판정 유보가 아니다")
+    void excludedByStatusAloneDoesNotDeferJudgment() {
+        // given: a row whose only contamination signal is the per-run excluded-by-status
+        // snapshot (field 1) — the Spec is explicit that this alone is evidence the filter is
+        // working, not a reason to defer judgment
+        EvalReportRow row = new EvalReportRow(
+                13, 13, 15, 10, 10, 0, 0L, BigDecimal.ZERO, 0,
+                List.of(new EvalExcludedDocumentStatusCount("FAILED", 3)), 0, List.of());
+
+        // when / then: the actual discriminating point is judgmentDeferred() — whether
+        // excludedByStatus() returns what it was given is a pass-through, no judgment involved
+        // (2026-08-30 review Low-4/correctness-Low-1). Value-preservation of excludedByStatus is
+        // already exercised meaningfully by EvalReportAggregatorTest's aggregate(cases,
+        // excludedByStatus) test, which builds the list through real aggregation rather than
+        // handing it straight back.
+        assertThat(row.judgmentDeferred()).isFalse();
+    }
+
+    @Test
+    @DisplayName("[eval-usage-dashboard:AC-19a] 회수 청크 중 INDEXED 외 상태가 1건이라도 있으면 판정 유보다")
+    void retrievedNonIndexedChunkDefersJudgment() {
+        // given: field 2 (chunks actually returned by retrieval) has 1 non-INDEXED chunk
+        EvalReportRow row = new EvalReportRow(
+                13, 13, 15, 10, 10, 0, 0L, BigDecimal.ZERO, 0,
+                List.of(), 1, List.of());
+
+        // when / then
+        assertThat(row.judgmentDeferred()).isTrue();
+    }
+
+    @Test
+    @DisplayName("[eval-usage-dashboard:AC-20a] finish_reason 분포에 length 1건이 있으면 판정 유보이고, null 은 별도 값으로 집계되어 행에서 빠지지 않는다")
+    void lengthFinishReasonDefersJudgmentAndNullIsItsOwnBucket() {
+        // given: two buckets — a null finish reason (unrecorded) and a "length" finish reason
+        EvalReportRow row = new EvalReportRow(
+                13, 13, 15, 10, 10, 0, 0L, BigDecimal.ZERO, 0,
+                List.of(), 0, List.of(new FinishReasonCount(null, 2), new FinishReasonCount("length", 1)));
+
+        // when / then: the actual discriminating point is judgmentDeferred() — asserting that
+        // finishReasonCounts() contains what it was given back is a pass-through, no judgment
+        // involved (2026-08-30 review Low-4/correctness-Low-1). Null-bucket preservation under
+        // real aggregation is already exercised meaningfully by
+        // EvalReportAggregatorTest#finishReasonDistributionIncludesLengthAndPreservesNullBucket.
+        assertThat(row.judgmentDeferred()).isTrue();
+    }
+
+    @Test
+    @DisplayName("[eval-usage-dashboard:AC-20a] finish_reason 분포에 length 가 없으면 그 신호만으로는 판정 유보가 아니다")
+    void noLengthFinishReasonDoesNotDeferJudgmentOnItsOwn() {
+        // given: only a "stop" bucket, no "length"
+        EvalReportRow row = new EvalReportRow(
+                13, 13, 15, 10, 10, 0, 0L, BigDecimal.ZERO, 0,
+                List.of(), 0, List.of(new FinishReasonCount("stop", 25)));
+
+        // when / then
+        assertThat(row.judgmentDeferred()).isFalse();
+    }
+
+    @Test
+    @DisplayName("excludedByStatus 가 null 이면 컴팩트 생성자에서 즉시 예외로 거부된다")
+    void rejectsNullExcludedByStatus() {
+        // given / when / then
+        assertThatThrownBy(() -> new EvalReportRow(0, 0, 0, 0, 0, 0, 0L, BigDecimal.ZERO, 0, null, 0, List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("finishReasonCounts 가 null 이면 컴팩트 생성자에서 즉시 예외로 거부된다")
+    void rejectsNullFinishReasonCounts() {
+        // given / when / then
+        assertThatThrownBy(() -> new EvalReportRow(0, 0, 0, 0, 0, 0, 0L, BigDecimal.ZERO, 0, List.of(), 0, null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("retrievedNonIndexedChunkCount 가 음수이면 컴팩트 생성자에서 즉시 예외로 거부된다")
+    void rejectsNegativeRetrievedNonIndexedChunkCount() {
+        // given / when / then
+        assertThatThrownBy(() -> new EvalReportRow(0, 0, 0, 0, 0, 0, 0L, BigDecimal.ZERO, 0, List.of(), -1, List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("레거시 9-인자 생성자는 오염 지표 필드를 빈 값/0 으로 채운다")
+    void legacyNineArgConstructorDefaultsContaminationFieldsToEmpty() {
+        // given: the pre-existing 9-arg shape every AC-6b/AC-8/AC-9a test uses
+        EvalReportRow row = new EvalReportRow(13, 13, 15, 10, 10, 0, 100L, BigDecimal.ZERO, 0);
+
+        // when / then: "no contamination observed" defaults, and the row is never deferred
+        assertThat(row.excludedByStatus()).isEmpty();
+        assertThat(row.retrievedNonIndexedChunkCount()).isZero();
+        assertThat(row.finishReasonCounts()).isEmpty();
+        assertThat(row.judgmentDeferred()).isFalse();
     }
 }
