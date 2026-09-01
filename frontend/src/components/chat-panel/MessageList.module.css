@@ -1,92 +1,480 @@
 /* Card F2 message transcript. Rewired onto the --app-* token layer (design-system D4;
-   --app-type-mono wiring landed earlier in D3) -- no hardcoded colors/spacing. */
+   --app-type-mono wiring landed earlier in D3) -- no hardcoded colors/spacing.
 
+   Card T6 (chat-prototype-port) replaces the old bordered-box row (both roles alike) with
+   the prototype's bubble/avatar structure (`insight-chat 프로토타입.html` P:197-199 user
+   bubble, P:204 assistant avatar+badge+body, decoded 2026-09-01 against resource uuid
+   52c01b12-fd4b-4200-96bd-3b9bde8010b9 -- same method T3/T4/T5 established). Every prototype
+   px value that has no exact `--app-*` match is mapped to the *nearest* existing token, or
+   written as `calc()` on that token / as `rem` for fixed control dimensions (both outside the
+   AC-27 scanner's px-literal scope by design) -- never as a new literal.
+   `border-radius`/`font-size` stay `var(...)`-only throughout (design-system:AC-11). Every
+   prototype 14px text value maps to --app-type-meta-size (13px), consistently. */
+
+/* P:146-147 -- the transcript is the screen's one scrolling region (`flex:1;overflow-y:auto`,
+   `padding:32px 32px 8px`); rows are centered into the `--app-answer-max` column and separated
+   by `--app-gap-xl`, as in the prototype's inner column. */
 .list {
   display: flex;
   flex-direction: column;
-  gap: var(--app-gap-md);
-  list-style: none;
-  max-height: 60vh;
+  align-items: center;
+  gap: var(--app-gap-xl);
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  padding: var(--app-gap-xl) var(--app-pad-screen) var(--app-gap-sm);
+  list-style: none;
 }
 
-.userRow,
+.list > li {
+  width: 100%;
+  max-width: var(--app-answer-max);
+}
+
+/* Alignment wrapper only -- the visible bubble styling lives on .userBubble below (the
+   prototype's UserMessage is `<div style="display:flex;justify-content:flex-end">`, P:197). */
+.userRow {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* P:204's `display:flex;gap:14px` -> --app-gap-md (12px), the same rounding the bubble's own
+   14px vertical padding uses below. */
 .assistantRow {
   display: flex;
-  flex-direction: column;
-  gap: var(--app-gap-sm);
-  padding: var(--app-gap-sm) var(--app-gap-md);
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-sm);
-  max-width: 42rem;
+  gap: var(--app-gap-md);
+  align-items: flex-start;
 }
 
-/* Distinguished by position, not color alone -- the role label text is the primary,
-   always-present signal (accessibility default: color/position alone must not carry
-   information for a user who cannot perceive layout). */
-.userRow {
-  align-self: flex-end;
-}
-
-.assistantRow {
-  align-self: flex-start;
-}
-
-.roleLabel {
-  font-size: var(--app-type-label-size);
-  font-weight: bold;
+/* P:197-199. max-width:76% ported as-is (a proportion, not a length scale value). padding
+   14px 18px -> --app-gap-md (12px) calc(--app-gap + 2px) (18px). border-radius 18px 18px 6px
+   18px -> --app-radius-lg (20px) for three corners and --app-radius-xs (4px) for the "tail".
+   font-size 15px is an *exact* match for --app-type-body-size. line-height 1.65 is a unitless
+   ratio (no token exists; kept literal). */
+.userBubble {
+  max-width: 76%;
+  padding: var(--app-gap-md) calc(var(--app-gap) + 2px);
+  border-radius: var(--app-radius-lg) var(--app-radius-lg) var(--app-radius-xs) var(--app-radius-lg);
+  background: var(--app-surface-strong);
+  font-size: var(--app-type-body-size);
+  line-height: 1.65;
   color: var(--app-text);
-}
-
-.plainText {
+  /* Preserves a user's own Shift+Enter line breaks (ChatPanel.tsx) -- carried over from the
+     pre-T6 `.plainText` rule this bubble replaces. */
   white-space: pre-wrap;
 }
 
-.empty {
+/* P:204. 30px is a fixed control dimension (same "plain literal" precedent as
+   `ChatWorkspace.module.css`'s `.ragToggle` and `ConversationSidebar.module.css`'s `.brandDot`).
+   margin-top 2px = half of --app-gap-xs. font-size 12px is an *exact* match for
+   --app-type-label-size. */
+.avatar {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  margin-top: calc(var(--app-gap-xs) / 2);
+  border-radius: var(--app-radius-pill);
+  background: var(--app-text);
+  color: var(--app-text-inverse);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--app-type-label-size);
+  font-weight: 700;
+}
+
+.assistantBody {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Standard "sr-only" pattern (same idiom `ChatPanel.module.css`'s `.visuallyHidden` already
+   uses) -- keeps the role label text available to assistive tech without a visible "나"/
+   "어시스턴트" prefix the prototype's own bubble/avatar screen does not show
+   (chat-prototype-port:AC-26 explicitly permits this). */
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Shared shape for the assistant row's single top badge slot (chat-prototype-port:AC-15/AC-24,
+   Spec §8 AD-5 -- see `MessageList.tsx`'s `TopBadge`). P:339/P:273 -- height 24px is a fixed
+   control dimension (same rationale as `.avatar` above). padding "0 11px 0 9px" ->
+   0 --app-gap-md 0 --app-gap-sm. margin-bottom 12px is an *exact* match for --app-gap-md.
+   gap 6px/7px -> a single --app-gap-sm for both variants. font-size 11px -> --app-type-label-size
+   (12px). */
+.topBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--app-gap-sm);
+  height: 24px;
+  padding: 0 var(--app-gap-md) 0 var(--app-gap-sm);
+  margin-bottom: var(--app-gap-md);
+  border-radius: var(--app-radius-pill);
+  font-size: var(--app-type-label-size);
+  font-weight: 700;
+}
+
+/* P:339 -- `box-shadow: inset 0 0 0 1px ...` mimics a 1px border (same "1px border-adjacent"
+   literal the repo's own convention already exempts). */
+.streamingBadge {
+  background: var(--app-accent-wash);
+  color: var(--app-accent);
+  box-shadow: inset 0 0 0 1px var(--app-accent-line);
+}
+
+.streamingBadgeIcon {
+  animation: ic-spin 0.9s linear infinite;
+}
+
+/* P:273 -- same inset-shadow-as-border reasoning as .streamingBadge above. */
+.ragOffBadge {
+  background: var(--app-bg-sunken);
+  color: var(--app-text-muted);
+  box-shadow: inset 0 0 0 1px var(--app-line);
+}
+
+/* P:356. width/margin-left 2px stay literal (a 4px-wide text cursor would read as a thick bar,
+   not a caret -- same reasoning as the repo's 1-2px border/outline exception). height
+   1.05em/vertical-align -0.18em are relative units the px token scale has no equivalent for. */
+.streamCaret {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: -0.18em;
+  background: var(--app-accent);
+  animation: ic-caret 1s step-end infinite;
+}
+
+/* P:284-291. gap 11px -> --app-gap-md. padding 14px 16px -> --app-gap-md var(--app-gap). */
+.ragOffNotice {
+  display: flex;
+  gap: var(--app-gap-md);
+  margin-top: var(--app-gap);
+  padding: var(--app-gap-md) var(--app-gap);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-bg-sunken);
+  border: 1px solid var(--app-line);
+}
+
+/* P:285-289. margin-top 2px = half of --app-gap-xs. */
+.ragOffNoticeIcon {
+  flex: none;
+  margin-top: calc(var(--app-gap-xs) / 2);
   color: var(--app-text-muted);
 }
 
-/* globals.css resets `* { margin: 0; padding: 0; }`, which would otherwise leave
-   react-markdown's headings/paragraphs touching each other and <ul>/<ol> unindented. */
+/* P:290. 14px -> --app-type-meta-size. */
+.ragOffNoticeText {
+  margin: 0;
+  font-size: var(--app-type-meta-size);
+  line-height: 1.6;
+  color: var(--app-text-muted);
+}
+
+.ragOffNoticeText strong {
+  font-weight: 600;
+  color: var(--app-text);
+}
+
+/* T7 (chat-prototype-port AC-12/AC-13) -- prototype P:150-162 empty state: accent dot, title +
+   description, and a row of example-question chips. `padding:80px 0 40px` = 2.5 x --app-gap-xl
+   / --app-gap-xl + --app-gap-sm; horizontal inset matches the transcript's own. Takes the same
+   flexible, scrolling slot `.list` does so the composer stays pinned to the bottom either way. */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--app-gap-lg);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: calc(var(--app-gap-xl) * 2.5) var(--app-pad-screen) calc(var(--app-gap-xl) + var(--app-gap-sm));
+  text-align: center;
+}
+
+/* P:152 -- 14px (`0.875rem`) accent dot. */
+.emptyDot {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: none;
+  border-radius: var(--app-radius-pill);
+  background: var(--app-accent);
+}
+
+/* P:154 -- 26px/700 -> --app-type-page-size (28px), the nearest step. `margin:0 0 10px` =
+   --app-gap-sm + 2. */
+.emptyTitle {
+  margin: 0 0 calc(var(--app-gap-sm) + 2px);
+  font-size: var(--app-type-page-size);
+  font-weight: var(--app-type-page-weight);
+  letter-spacing: -0.5px;
+  color: var(--app-text);
+}
+
+/* P:155 -- `max-width:460px` (`28.75rem`), 15px/1.7. */
+.emptyDescription {
+  margin: 0;
+  max-width: 28.75rem;
+  font-size: var(--app-type-body-size);
+  line-height: 1.7;
+  color: var(--app-text-muted);
+  text-wrap: pretty;
+}
+
+/* P:157 -- `max-width:600px` (`37.5rem`). */
+.exampleChips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--app-gap-sm);
+  max-width: 37.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* P:158 -- 38px (`2.375rem`) pill, `padding:0 16px`, 14px -> --app-type-meta-size. */
+.exampleChip {
+  height: 2.375rem;
+  padding: 0 var(--app-gap);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-pill);
+  background: var(--app-surface);
+  color: var(--app-text);
+  font: inherit;
+  font-size: var(--app-type-meta-size);
+  cursor: pointer;
+}
+
+.exampleChip:hover {
+  border-color: var(--app-text);
+}
+
+/* Matches `ChatPanel.module.css`'s `.textarea`/`.button` focus-visible treatment -- same
+   outline color/offset for every focusable control in this screen (accessibility default:
+   visible focus indicator). */
+.exampleChip:focus-visible {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+/* Assistant answer body -- P:214/P:361: --app-type-answer-size / --app-type-answer-lh in
+   --app-text-body, headings and emphasis in ink. globals.css resets `* { margin: 0; padding: 0;
+   }`, which would otherwise leave react-markdown's headings/paragraphs touching each other and
+   <ul>/<ol> unindented. */
+.markdown {
+  font-size: var(--app-type-answer-size);
+  line-height: var(--app-type-answer-lh);
+  color: var(--app-text-body);
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
 .markdown * + * {
   margin-top: var(--app-gap-sm);
 }
 
+.markdown p + p,
+.markdown * + h1,
+.markdown * + h2,
+.markdown * + h3,
+.markdown * + pre,
+.markdown * + table {
+  margin-top: var(--app-gap);
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  line-height: 1.35;
+  color: var(--app-text);
+}
+
+/* P:213 -- 19px/700 -> --app-type-section-size (20px). */
+.markdown h1 {
+  font-size: var(--app-type-page-size);
+}
+
+.markdown h2,
+.markdown h3 {
+  font-size: var(--app-type-section-size);
+}
+
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: var(--app-type-card-size);
+}
+
+.markdown strong {
+  font-weight: 600;
+  color: var(--app-text);
+}
+
+.markdown a {
+  color: var(--app-accent);
+  text-decoration: underline;
+}
+
+/* P:215 -- `padding-left:20px` = --app-gap + --app-gap-xs; `li { margin-bottom:4px }`. */
 .markdown ul,
 .markdown ol {
-  padding-left: var(--app-gap-md);
+  padding-left: calc(var(--app-gap) + var(--app-gap-xs));
 }
 
+.markdown li + li {
+  margin-top: var(--app-gap-xs);
+}
+
+/* P:364-373 -- code block: hairline frame, `padding:16px`, mono at --app-type-code-size. */
 .markdown pre {
-  padding: var(--app-gap-sm);
+  padding: var(--app-gap);
   border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-xs);
+  border-radius: var(--app-radius-sm);
   overflow-x: auto;
+  background: var(--app-surface);
   font-family: var(--app-type-mono);
+  font-size: var(--app-type-code-size);
+  line-height: 1.75;
+  color: var(--app-text);
 }
 
+/* P:361 -- inline code: `padding:2px 6px` (half of --app-gap-xs / --app-gap-sm - 2), sunken
+   background, 14px -> --app-type-meta-size. */
 .markdown code {
+  padding: calc(var(--app-gap-xs) / 2) calc(var(--app-gap-sm) - 2px);
+  border-radius: var(--app-radius-xs);
+  background: var(--app-bg-sunken);
   font-family: var(--app-type-mono);
+  font-size: var(--app-type-meta-size);
+  color: var(--app-text);
 }
 
-/* Citation area (hybrid-rag Spec AC-18/AC-20/AC-21) -- --app-line-soft divider mirrors the
-   prototype chat blob's SourceList block (margin-top:22px;padding-top:16px;border-top). */
-.sources {
+.markdown pre code {
+  padding: 0;
+  border-radius: var(--app-radius-none);
+  background: none;
+  font-size: var(--app-type-code-size);
+}
+
+/* P:221-248 -- table: sunken header row, hairline separators, 14px -> --app-type-meta-size,
+   `padding:11px 14px` -> --app-gap-md var(--app-gap). */
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--app-type-meta-size);
+}
+
+.markdown th,
+.markdown td {
+  padding: var(--app-gap-md) var(--app-gap);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown th {
+  font-weight: 600;
+  color: var(--app-text);
+  background: var(--app-bg-sunken);
+  border-bottom: 1px solid var(--app-line);
+}
+
+.markdown td {
+  color: var(--app-text-body);
+  border-bottom: 1px solid var(--app-line-soft);
+}
+
+.markdown blockquote {
+  padding-left: var(--app-gap);
+  border-left: 2px solid var(--app-line-strong);
+  color: var(--app-text-muted);
+}
+
+/* Card T10 (chat-prototype-port:AC-19) -- a failed turn's error card, rendered below whatever
+   text already arrived (Spec §8 R-5, AD-9). P:178-189: `padding:22px` (= --app-gap-lg - 2),
+   danger wash with a 1.5px inset danger ring, title 16px/600, outlined retry button below it. */
+.errorCard {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--app-gap-md);
   margin-top: var(--app-gap-md);
-  padding-top: var(--app-gap-sm);
+  padding: calc(var(--app-gap-lg) - 2px);
+  border-radius: var(--app-radius-md);
+  background: var(--app-status-danger-wash);
+  box-shadow: inset 0 0 0 1.5px var(--app-status-danger);
+}
+
+.errorCardTitle {
+  margin: 0;
+  font-size: var(--app-type-card-size);
+  font-weight: 600;
+  color: var(--app-status-danger);
+}
+
+/* P:187 -- 38px (`2.375rem`), `padding:0 16px`, 1.5px danger outline, fills on hover. */
+.errorCardRetryButton {
+  flex: none;
+  height: 2.375rem;
+  padding: 0 var(--app-gap);
+  border: 1.5px solid var(--app-status-danger);
+  border-radius: var(--app-radius-sm);
+  background: none;
+  color: var(--app-status-danger);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--app-type-meta-size);
+  font-weight: 600;
+}
+
+.errorCardRetryButton:hover:not(:disabled) {
+  background: var(--app-status-danger);
+  color: var(--app-text-inverse);
+}
+
+.errorCardRetryButton:focus-visible {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+.errorCardRetryButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Citation area (hybrid-rag Spec AC-18/AC-20/AC-21) -- P:253: `margin-top:22px` (= --app-gap-lg
+   - 2), `padding-top:16px`, --app-line-soft divider. */
+.sources {
+  margin-top: calc(var(--app-gap-lg) - 2px);
+  padding-top: var(--app-gap);
   border-top: 1px solid var(--app-line-soft);
 }
 
+/* P:254 -- `gap:7px;margin-bottom:11px` -> --app-gap-sm / --app-gap-md. */
 .sourcesHeader {
   display: flex;
   align-items: center;
-  gap: var(--app-gap-xs);
-  margin-bottom: var(--app-gap-sm);
+  gap: var(--app-gap-sm);
+  margin-bottom: var(--app-gap-md);
 }
 
 .sourcesLabel {
   font-size: var(--app-type-meta-size);
-  font-weight: bold;
+  font-weight: 700;
   color: var(--app-text);
 }
 
@@ -99,25 +487,42 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--app-gap-sm);
+  margin: 0;
+  padding: 0;
   list-style: none;
 }
 
+/* SourceChip (decoded blob 2b98462d) -- 34px (`2.125rem`) pill, `padding:0 14px 0 11px` ->
+   0 --app-gap-md, doc icon in muted ink, 14px -> --app-type-meta-size. */
 .sourceItem {
-  padding: var(--app-gap-xs) var(--app-gap-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--app-gap-sm);
+  max-width: 100%;
+  height: 2.125rem;
+  padding: 0 var(--app-gap-md);
   border: 1px solid var(--app-line);
   border-radius: var(--app-radius-pill);
   background: var(--app-surface);
   font-size: var(--app-type-meta-size);
-  color: var(--app-text-body);
+  color: var(--app-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* AC-20 -- confirmed-empty sources. Matches the prototype's showNoSource block: dashed
-   --app-line-strong border, neutral (not danger) tone. */
+.sourceIcon {
+  flex: none;
+  color: var(--app-text-muted);
+}
+
+/* AC-20 -- confirmed-empty sources. P:316: dashed --app-line-strong border, neutral (not
+   danger) tone, `padding:13px 16px` -> --app-gap-md var(--app-gap). */
 .sourcesEmpty {
   display: flex;
   align-items: center;
   gap: var(--app-gap-sm);
-  padding: var(--app-gap-sm) var(--app-gap-md);
+  padding: var(--app-gap-md) var(--app-gap);
   border: 1px dashed var(--app-line-strong);
   border-radius: var(--app-radius-sm);
   background: var(--app-bg-sunken);
@@ -132,10 +537,25 @@
   display: flex;
   align-items: center;
   gap: var(--app-gap-sm);
-  padding: var(--app-gap-sm) var(--app-gap-md);
+  padding: var(--app-gap-md) var(--app-gap);
   border: 1px solid var(--app-status-danger);
   border-radius: var(--app-radius-sm);
   background: var(--app-status-danger-wash);
   color: var(--app-status-danger);
   font-size: var(--app-type-meta-size);
+}
+
+/* chat-prototype-port:AC-40 (partial -- `ic-caret`/`ic-spin` only; `ic-shimmer` is T4's scope,
+   §8 D-8). The spinner stops like any other decorative motion. The caret is the deliberate
+   exception (Spec §8 D-8's "캐럿의 특수성"): it does *not* disappear, only stops blinking --
+   `animation: none` leaves it at its base (visible, `opacity: 1`) state, satisfying
+   chat-prototype-port:AC-16's "캐럿 요소 1개 존재" even under `prefers-reduced-motion: reduce`. */
+@media (prefers-reduced-motion: reduce) {
+  .streamingBadgeIcon {
+    animation: none;
+  }
+
+  .streamCaret {
+    animation: none;
+  }
 }

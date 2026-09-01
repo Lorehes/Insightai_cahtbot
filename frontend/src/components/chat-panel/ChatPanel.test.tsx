@@ -189,6 +189,10 @@ describe("ChatPanel", () => {
     await waitFor(() => expect(mockedStreamAssistantReply).toHaveBeenCalledTimes(1));
   });
 
+  // Body replaced by card T10 (chat-prototype-port:AC-19, Spec §Tech Review AD-9/R-2) --
+  // the old "(연결이 끊어졌습니다)" content-suffix assertion is gone (the suffix itself was
+  // removed from ChatPanel.tsx), but the test's own name is kept per Spec §8 R-2/§Tech
+  // Review "그 밖의 리스크" 2.
   it("marks the reply as an error when the stream throws mid-turn (not an intentional abort)", async () => {
     mockedStreamAssistantReply.mockImplementation(async function* () {
       yield { conversationId: "conv-1", delta: "partial", finishReason: null, usage: null, sources: null };
@@ -201,16 +205,20 @@ describe("ChatPanel", () => {
     await user.type(textbox, "hi");
     await user.click(screen.getByRole("button", { name: "전송" }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/연결이 끊어졌습니다/));
+    // The already-arrived text stays on screen, unmodified (Spec §8 R-5) -- no suffix, no
+    // rewrite.
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("partial"));
     expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "false");
     // No sources were ever received before the throw -- AC-21 clause ③'s failure text is
-    // accurate here too, alongside the content-level error text (see ChatPanel.tsx's own
-    // [Caution] on this catch branch).
+    // accurate here too, alongside the error card (see ChatPanel.tsx's own [Caution] on this
+    // catch branch).
     expect(screen.getByText("출처를 불러오지 못했습니다.")).toBeInTheDocument();
   });
 
   // review 2026-08-31 round-2 correctness Low-2: the catch branch must not discard a sources
   // array that a chunk already delivered before a later chunk throws.
+  // Body replaced by card T10 (same reason as the test above) -- name kept, the
+  // "(연결이 끊어졌습니다)" assertion is gone.
   it("keeps sources already received before a mid-stream throw, instead of discarding them to the clause ③ failure screen", async () => {
     mockedStreamAssistantReply.mockImplementation(async function* () {
       yield {
@@ -229,7 +237,7 @@ describe("ChatPanel", () => {
     await user.type(textbox, "hi");
     await user.click(screen.getByRole("button", { name: "전송" }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/연결이 끊어졌습니다/));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("partial"));
     expect(screen.getByText("1건")).toBeInTheDocument();
     expect(screen.queryByText("출처를 불러오지 못했습니다.")).not.toBeInTheDocument();
   });
@@ -255,6 +263,73 @@ describe("ChatPanel", () => {
     const reply = await screen.findByRole("status");
     await waitFor(() => expect(reply).toHaveTextContent("an error occurred while generating the response"));
     await waitFor(() => expect(reply).toHaveAttribute("aria-busy", "false"));
+  });
+
+  it("[chat-prototype-port:AC-17] shows exactly one 생성 중단 button while streaming, and swaps back to 전송 once the stream ends", async () => {
+    const gate = createGate();
+    mockedStreamAssistantReply.mockImplementation(async function* () {
+      await gate.promise;
+      yield { conversationId: "conv-1", delta: "ok", finishReason: "STOP", usage: null, sources: null };
+    });
+    const user = userEvent.setup();
+    render(<ChatPanel />);
+    const textbox = await waitForReady();
+
+    // Idle: one 전송 button, zero 생성 중단 buttons.
+    expect(screen.getByRole("button", { name: "전송" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "생성 중단" })).not.toBeInTheDocument();
+
+    await user.type(textbox, "hi");
+    await user.click(screen.getByRole("button", { name: "전송" }));
+
+    // Streaming: the reverse -- zero 전송 buttons, one 생성 중단 button.
+    await waitFor(() => expect(screen.getByRole("button", { name: "생성 중단" })).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "전송" })).not.toBeInTheDocument();
+
+    gate.release();
+
+    // Stream ends: back to the idle state -- the reverse condition, asserted explicitly (Spec
+    // §6 "테스트 함정": both directions of the swap must be checked, not just one).
+    await waitFor(() => expect(screen.getByRole("button", { name: "전송" })).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "생성 중단" })).not.toBeInTheDocument();
+  });
+
+  it("[chat-prototype-port:AC-18] clicking 생성 중단 aborts the AbortSignal, keeps the text already received, re-enables the input, and does not mis-render the citation delivery-failure box", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    mockedStreamAssistantReply.mockImplementation(async function* (_id, _message, options) {
+      capturedSignal = options?.signal;
+      yield { conversationId: "conv-1", delta: "partial answer", finishReason: null, usage: null, sources: null };
+      // Mirrors `lib/api/messages.ts`'s real `fetch(..., { signal })` contract: aborting the
+      // signal rejects the in-flight read with a `DOMException("AbortError")`, which is what
+      // propagates out of the `for await` loop in `ChatPanel.handleSend` as a thrown error.
+      await new Promise<never>((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      });
+    });
+    const user = userEvent.setup();
+    render(<ChatPanel />);
+    const textbox = await waitForReady();
+
+    await user.type(textbox, "hi");
+    await user.click(screen.getByRole("button", { name: "전송" }));
+    await screen.findByText("partial answer");
+    expect(capturedSignal?.aborted).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "생성 중단" }));
+
+    // (a) the signal was actually aborted.
+    await waitFor(() => expect(capturedSignal?.aborted).toBe(true));
+    // (b) the text that already arrived stays on screen, unmodified -- no suffix/rewrite.
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("partial answer"));
+    expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "false");
+    expect(screen.queryByTestId("stream-caret")).not.toBeInTheDocument();
+    // (c) the input is re-enabled and back to its idle 전송 state.
+    await waitFor(() => expect(textbox).toBeEnabled());
+    expect(screen.getByRole("button", { name: "전송" })).toBeInTheDocument();
+    // (d) the core bug AD-4 exists to prevent: a user-initiated stop must not be mis-rendered
+    // as clause ③'s delivery-failure box (it would be if `sources` stayed `null` instead of
+    // becoming `undefined`).
+    expect(screen.queryByText("출처를 불러오지 못했습니다.")).not.toBeInTheDocument();
   });
 
   it("aborts an in-flight stream's AbortSignal when the panel unmounts", async () => {
@@ -300,7 +375,28 @@ describe("ChatPanel", () => {
     render(<ChatPanel conversationId="existing-conv" />);
 
     await waitForReady();
-    expect(screen.getByText("대화를 시작해보세요.")).toBeInTheDocument();
+    // Body updated by T7 (chat-prototype-port AC-12 replaces the old placeholder sentence,
+    // Spec §Tech Review AD-2) -- this test's own name is unchanged, it still checks "starts
+    // empty, nothing seeded".
+    expect(screen.getByText("무엇을 찾아드릴까요?")).toBeInTheDocument();
+  });
+
+  it("[chat-prototype-port:AC-14] clicking an example chip sends that chip's exact label, not whatever is in the draft textarea", async () => {
+    mockedStreamAssistantReply.mockImplementation(() =>
+      singleChunkReply([{ conversationId: "conv-1", delta: "ok", finishReason: "STOP", usage: null, sources: null }]),
+    );
+    const user = userEvent.setup();
+    render(<ChatPanel conversationId="existing-conv" />);
+    await waitForReady();
+
+    // Spec §6 discriminating-power requirement 4 -- literal re-typed here, not read off a
+    // component-exported constant.
+    await user.click(screen.getByRole("button", { name: "연차 이월 규정이 어떻게 되나요?" }));
+
+    await waitFor(() => expect(mockedStreamAssistantReply).toHaveBeenCalledTimes(1));
+    // Character-for-character equality against the raw second positional argument, not a
+    // substring/regex match (Spec §6 판별력 요건: "정규화 후 비교 금지").
+    expect(mockedStreamAssistantReply.mock.calls[0][1]).toBe("연차 이월 규정이 어떻게 되나요?");
   });
 
   it("[chat:AC-39] forwards the given model prop to streamAssistantReply when sending", async () => {
@@ -354,6 +450,88 @@ describe("ChatPanel", () => {
     await waitForReady();
 
     expect(onConversationCreated).not.toHaveBeenCalled();
+  });
+
+  it("[chat-prototype-port:AC-21] the composer textarea has the fixed placeholder text, even while the conversation is still being created", async () => {
+    let resolveCreate!: (value: typeof READY_CONVERSATION) => void;
+    mockedCreateConversation.mockReset();
+    mockedCreateConversation.mockReturnValue(new Promise((resolve) => (resolveCreate = resolve)));
+
+    render(<ChatPanel />);
+
+    // Char-for-char match required (Spec §4 header note) -- literal `+`, and the space before
+    // "로" that the old conditional "준비 중" placeholder never had to get right.
+    expect(screen.getByRole("textbox")).toHaveAttribute(
+      "placeholder",
+      "사내 문서에 대해 질문하세요. Shift + Enter 로 줄바꿈.",
+    );
+
+    resolveCreate(READY_CONVERSATION);
+    await waitForReady();
+
+    // Same literal string once "creating" resolves to "ready" -- there is no longer a second,
+    // conditional placeholder variant (AC-7's retired "대화 준비 중..." branch).
+    expect(screen.getByRole("textbox")).toHaveAttribute(
+      "placeholder",
+      "사내 문서에 대해 질문하세요. Shift + Enter 로 줄바꿈.",
+    );
+  });
+
+  it("[chat-prototype-port:AC-23] renders the fixed disclaimer below the composer regardless of RAG/streaming state", async () => {
+    render(<ChatPanel ragEnabled={false} />);
+    await waitForReady();
+
+    expect(
+      screen.getByText("답변은 사내 문서를 근거로 생성됩니다. 중요한 결정 전에는 원문을 확인하세요."),
+    ).toBeInTheDocument();
+  });
+
+  describe("[chat-prototype-port:AC-22] composer hint text", () => {
+    it("shows the RAG ON hint when idle and ragEnabled is true", async () => {
+      render(<ChatPanel ragEnabled={true} />);
+      await waitForReady();
+
+      expect(screen.getByText("문서 근거 ON · 사내 문서에서 검색한 뒤 답변합니다")).toBeInTheDocument();
+    });
+
+    it("shows the RAG OFF hint when idle and ragEnabled is false", async () => {
+      render(<ChatPanel ragEnabled={false} />);
+      await waitForReady();
+
+      expect(screen.getByText("문서 근거 OFF · 모델의 일반 지식만으로 답변합니다")).toBeInTheDocument();
+    });
+
+    it("prioritizes the streaming hint over the RAG hint while a reply is in flight, then reverts once it finishes", async () => {
+      const gate = createGate();
+      mockedStreamAssistantReply.mockImplementation(async function* () {
+        await gate.promise;
+        yield { conversationId: "conv-1", delta: "ok", finishReason: "STOP", usage: null, sources: null };
+      });
+      const user = userEvent.setup();
+      render(<ChatPanel ragEnabled={true} />);
+      const textbox = await waitForReady();
+
+      expect(screen.getByText("문서 근거 ON · 사내 문서에서 검색한 뒤 답변합니다")).toBeInTheDocument();
+
+      await user.type(textbox, "hi");
+      await user.click(screen.getByRole("button", { name: "전송" }));
+
+      await waitFor(() =>
+        expect(
+          screen.getByText("응답을 스트리밍 중입니다 · 입력이 잠시 비활성화됩니다"),
+        ).toBeInTheDocument(),
+      );
+      expect(screen.queryByText("문서 근거 ON · 사내 문서에서 검색한 뒤 답변합니다")).not.toBeInTheDocument();
+
+      gate.release();
+
+      await waitFor(() =>
+        expect(screen.getByText("문서 근거 ON · 사내 문서에서 검색한 뒤 답변합니다")).toBeInTheDocument(),
+      );
+      expect(
+        screen.queryByText("응답을 스트리밍 중입니다 · 입력이 잠시 비활성화됩니다"),
+      ).not.toBeInTheDocument();
+    });
   });
 
   describe("citation area wiring (hybrid-rag Spec T15, AC-21)", () => {
@@ -496,6 +674,110 @@ describe("ChatPanel", () => {
       // Turn 1 still unaffected after turn 2 resolves.
       expect(within(turn1Row).getByText("1건")).toBeInTheDocument();
       expect(within(turn1Row).getByText("turn1.pdf")).toBeInTheDocument();
+    });
+  });
+
+  describe("error card + retry (card T10)", () => {
+    it("[chat-prototype-port:AC-19] renders a role=alert error card with the fixed title and a 다시 시도 button when the stream fails, and 0 of the old inline error sentence", async () => {
+      mockedStreamAssistantReply.mockImplementation(async function* () {
+        yield { conversationId: "conv-1", delta: "partial", finishReason: null, usage: null, sources: null };
+        throw new Error("network dropped");
+      });
+      const user = userEvent.setup();
+      render(<ChatPanel />);
+      const textbox = await waitForReady();
+
+      await user.type(textbox, "hi");
+      await user.click(screen.getByRole("button", { name: "전송" }));
+
+      const errorCard = await screen.findByRole("alert");
+      expect(within(errorCard).getByText("응답을 받지 못했습니다")).toBeInTheDocument();
+      expect(within(errorCard).getByRole("button", { name: "다시 시도" })).toBeInTheDocument();
+      // INC-013 absence proof -- the old inline sentence must be gone entirely, not merely
+      // coexisting alongside the new card.
+      expect(screen.queryByText("메시지를 가져오지 못했습니다.")).not.toBeInTheDocument();
+      // Already-arrived text stays on screen (Spec §8 R-5), not replaced by the card.
+      expect(screen.getByText("partial")).toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-19] still renders the error card when nothing streamed before the failure (empty content)", async () => {
+      mockedStreamAssistantReply.mockImplementation(async function* () {
+        throw new Error("network dropped");
+      });
+      const user = userEvent.setup();
+      render(<ChatPanel />);
+      const textbox = await waitForReady();
+
+      await user.type(textbox, "hi");
+      await user.click(screen.getByRole("button", { name: "전송" }));
+
+      const errorCard = await screen.findByRole("alert");
+      expect(within(errorCard).getByText("응답을 받지 못했습니다")).toBeInTheDocument();
+      expect(screen.queryByText("메시지를 가져오지 못했습니다.")).not.toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-20] clicking 다시 시도 resends the exact same question on the same conversationId as a new turn, without removing the failed turn", async () => {
+      mockedStreamAssistantReply
+        .mockImplementationOnce(async function* () {
+          yield { conversationId: "conv-1", delta: "", finishReason: null, usage: null, sources: null };
+          throw new Error("network dropped");
+        })
+        .mockImplementationOnce(() =>
+          singleChunkReply([
+            { conversationId: "conv-1", delta: "second try ok", finishReason: "STOP", usage: null, sources: null },
+          ]),
+        );
+      const user = userEvent.setup();
+      render(<ChatPanel />);
+      const textbox = await waitForReady();
+
+      await user.type(textbox, "hi");
+      await user.click(screen.getByRole("button", { name: "전송" }));
+
+      const errorCard = await screen.findByRole("alert");
+      await user.click(within(errorCard).getByRole("button", { name: "다시 시도" }));
+
+      await waitFor(() => expect(mockedStreamAssistantReply).toHaveBeenCalledTimes(2));
+      // Same `conversationId`/`message` arguments on both calls (AC-20's own wording).
+      expect(mockedStreamAssistantReply.mock.calls[1][0]).toBe(mockedStreamAssistantReply.mock.calls[0][0]);
+      expect(mockedStreamAssistantReply.mock.calls[1][1]).toBe(mockedStreamAssistantReply.mock.calls[0][1]);
+      expect(mockedStreamAssistantReply.mock.calls[1][1]).toBe("hi");
+
+      await screen.findByText("second try ok");
+      // The failed turn is not deleted from the transcript -- "hi" now appears twice (the
+      // original failed turn's own user message, plus the retried turn's).
+      expect(screen.getAllByText("hi")).toHaveLength(2);
+    });
+
+    it("[chat-prototype-port:AC-20] disables the 다시 시도 button while a retried turn is streaming", async () => {
+      const gate = createGate();
+      mockedStreamAssistantReply
+        .mockImplementationOnce(async function* () {
+          yield { conversationId: "conv-1", delta: "partial", finishReason: null, usage: null, sources: null };
+          throw new Error("network dropped");
+        })
+        .mockImplementationOnce(async function* () {
+          await gate.promise;
+          yield { conversationId: "conv-1", delta: "ok", finishReason: "STOP", usage: null, sources: null };
+        });
+      const user = userEvent.setup();
+      render(<ChatPanel />);
+      const textbox = await waitForReady();
+
+      await user.type(textbox, "hi");
+      await user.click(screen.getByRole("button", { name: "전송" }));
+
+      const errorCard = await screen.findByRole("alert");
+      const retryButton = within(errorCard).getByRole("button", { name: "다시 시도" });
+      expect(retryButton).toBeEnabled();
+
+      await user.click(retryButton);
+
+      await waitFor(() => expect(retryButton).toBeDisabled());
+
+      gate.release();
+
+      await waitFor(() => expect(retryButton).toBeEnabled());
     });
   });
 });

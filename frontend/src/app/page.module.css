@@ -1,12 +1,12 @@
-/* Screen root layout. Rewired onto the --app-* token layer (design-system D4) --
-   padding uses --app-pad-screen (screen-outer margin, Spec §Tech Review AD-5 exception),
-   not --app-gap-md. */
+/* Screen root layout (card T2, chat-prototype-port). Full-viewport, 2-column frame --
+   `<ChatWorkspace>` (this file's one child) renders its own `<aside>` sidebar and content area as
+   siblings; this file only pins the outer frame to the viewport so those two can stretch to the
+   bottom edge, matching the prototype's root (`display:flex;height:100%;overflow:hidden`, P:28).
+   No outer padding: the prototype's rail and topbar sit flush against the viewport, and every
+   inner block carries its own `--app-pad-screen` inset instead. */
 
 .page {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--app-gap-md);
-  padding: var(--app-pad-screen);
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }

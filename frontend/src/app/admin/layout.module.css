@@ -1,37 +1,37 @@
 /* document-ingestion T11: shared /admin/** shell, left side rail per prototype (blob
-   `09e01276`) -- corrected 2026-08-30 from an earlier top-bar version built on a coordinator
-   instruction that contradicted the prototype. Tokens only, no hardcoded colors/spacing-scale
-   values -- the few px literals below (marker bar / brand dot size, nav item height) are
-   structural dimensions, not color/spacing-scale substitutes.
-   review 2026-08-30 T11 1R Medium-1 (maintainability): this comment used to cite
-   `ConversationSidebar.module.css`'s `width: 16rem` as a precedent for that exception -- that
-   file has no such exception language at all (checked directly), so the citation was wrong and
-   is removed. `.brandSub`'s `padding-left` below is the one value here that is spacing-shaped
-   rather than purely structural, so it is written as `calc(9px + var(--app-gap-sm))` instead of
-   a bare literal -- `9px` is `.brandDot`'s own width and `--app-gap-sm` is `.brandRow`'s own
-   gap, so the padding stays derived from those two declarations (both already visible above)
-   instead of being a separately-tuned magic number that can silently drift from them.
-   Active-tab treatment (left marker bar + weight/color, never color alone) mirrors
-   ConversationSidebar.module.css's .selectButtonActive. */
+   `09e01276`, AdminNav P:27-54 + AdminContent P:57). Tokens only for color/radius/font-size
+   (design-system:AC-10/AC-11); the px values below are the prototype's own structural
+   dimensions (rail paddings, 42px nav rows, 40px exit button, marker bar / brand dot size).
+   `.brandSub`'s `padding-left` is derived from `.brandDot`'s width + `.brandRow`'s gap so it
+   stays aligned with `.brandName`'s text instead of being a separately tuned number.
+   Active-tab treatment (left marker bar + weight/color + sunken row background, never color
+   alone) mirrors ConversationSidebar.module.css's selected row; aria-current carries the same
+   information non-visually. */
 
+/* P:24 -- `display:flex;height:100%;overflow:hidden`. `100vh` rather than `100%`: the body is
+   not a fixed-height box, so a percentage would resolve to `auto` and the rail would stop at
+   its own content height instead of the viewport bottom. */
 .shell {
   display: flex;
-  height: 100%;
+  height: 100vh;
   overflow: hidden;
   background: var(--app-bg);
+  color: var(--app-text);
 }
 
 .rail {
   display: flex;
   flex-direction: column;
   width: var(--app-admin-nav-width);
+  height: 100%;
   flex: none;
   border-right: 1px solid var(--app-line);
   background: var(--app-bg-sunken);
 }
 
+/* P:28 -- `padding:20px 18px 16px`. */
 .brand {
-  padding: var(--app-gap-lg) var(--app-gap-md) var(--app-gap-md);
+  padding: 20px 18px 16px;
   border-bottom: 1px solid var(--app-line);
 }
 
@@ -51,41 +51,55 @@
 
 .brandName {
   /* Prototype specifies 17px here; design-system:AC-11 forbids a literal font-size, so this
-     uses the closest existing typography token instead of introducing a new one (not this
-     card's call to make). */
+     uses the closest existing typography token instead of introducing a new one. */
   font-size: var(--app-type-card-size);
   font-weight: 700;
   letter-spacing: -0.3px;
   color: var(--app-text);
 }
 
+/* P:33 -- `margin-top:4px;padding-left:17px` (= dot 9px + row gap 8px). */
 .brandSub {
   margin-top: var(--app-gap-xs);
-  /* Aligns with .brandName's text, not .brandDot's own edge -- see file header comment above. */
   padding-left: calc(9px + var(--app-gap-sm));
   font-size: var(--app-type-meta-size);
   font-weight: 600;
   color: var(--app-text-muted);
 }
 
+/* P:36 -- `gap:2px;padding:14px 10px`. */
 .nav {
   flex: 1;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: var(--app-gap-md) var(--app-gap-sm);
+  padding: 14px 10px;
 }
 
+.navList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* P:38 -- 42px rows, `gap:10px;padding:0 12px`, sunken on hover and when active. */
 .navItem,
 .navItemActive {
   display: flex;
   align-items: center;
-  gap: var(--app-gap-sm);
+  gap: 10px;
   height: 42px;
   padding: 0 var(--app-gap-md);
   border-radius: var(--app-radius-sm);
-  color: var(--app-text-muted);
+  color: var(--app-text-body);
   text-decoration: none;
+}
+
+.navItem:hover {
+  background: var(--app-surface-strong);
 }
 
 .navItem:focus-visible,
@@ -97,12 +111,13 @@
 /* Active state is marked by weight + text color + the left marker bar below, not color alone
    -- aria-current carries the same information non-visually. */
 .navItemActive {
-  background: var(--app-accent-wash);
+  background: var(--app-surface-strong);
   color: var(--app-text);
 }
 
-/* No explicit `background` here -- an unset one already renders the same way, and
-   design-system:AC-10's named-color scanner also flags that CSS keyword in comments. */
+/* P:39 -- 3x18 marker bar. No explicit `background` here: an unset one already renders the
+   same way, and design-system:AC-10's named-color scanner also flags that CSS keyword in
+   comments. */
 .navMarker {
   width: 3px;
   height: 18px;
@@ -114,6 +129,7 @@
   background: var(--app-accent);
 }
 
+/* P:40 -- 15px, 400/600. */
 .navLabel {
   flex: 1;
   font-size: var(--app-type-body-size);
@@ -124,18 +140,31 @@
   font-weight: 600;
 }
 
+/* P:46 -- `padding:14px 18px 18px`. */
 .exit {
-  padding: var(--app-gap-md) var(--app-gap-md) var(--app-gap-lg);
+  padding: 14px 18px 18px;
   border-top: 1px solid var(--app-line);
 }
 
+/* P:47 -- full-width 40px outlined button; 14px/600 -> --app-type-meta-size (13px). */
 .exitLink {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: var(--app-gap-xs);
-  color: var(--app-text-muted);
-  font-size: var(--app-type-body-size);
+  gap: var(--app-gap-sm);
+  width: 100%;
+  height: 40px;
+  padding: 0 var(--app-gap-md);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface);
+  color: var(--app-text);
+  font-size: var(--app-type-meta-size);
+  font-weight: 600;
   text-decoration: none;
+}
+
+.exitLink:hover {
+  border-color: var(--app-text);
 }
 
 .exitLink:focus-visible {
@@ -143,10 +172,16 @@
   outline-offset: 2px;
 }
 
+.exitIcon {
+  flex: none;
+}
+
+/* P:57 -- the scrolling content pane. Each page under it (`DocumentManager`/`UsageDashboard`)
+   carries the prototype's own `padding: --app-pad-screen ... --app-gap-xl` and `max-width`
+   (P:26 of each screen blob), so this pane adds no inset of its own. */
 .content {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
   background: var(--app-bg);
-  padding: var(--app-pad-screen);
 }

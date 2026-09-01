@@ -2,6 +2,7 @@ package art.insightai.chatbot.rag.ingest;
 
 import art.insightai.chatbot.common.config.AppProperties;
 import art.insightai.chatbot.rag.domain.Document;
+import art.insightai.chatbot.rag.domain.DocumentExtractionForbiddenException;
 import art.insightai.chatbot.rag.domain.DocumentQuotaExceededException;
 import art.insightai.chatbot.rag.domain.DocumentRepository;
 import art.insightai.chatbot.rag.domain.DocumentTooLargeException;
@@ -9,6 +10,9 @@ import art.insightai.chatbot.rag.domain.DocumentUploadedEvent;
 import art.insightai.chatbot.rag.domain.InvalidDocumentFilenameException;
 import art.insightai.chatbot.rag.domain.UnsupportedDocumentTypeException;
 
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -18,9 +22,11 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 
 /**
  * [Purpose] Business logic behind {@code POST /api/admin/documents} (document-ingestion Spec Tech
@@ -158,6 +164,8 @@ public class DocumentUploadService {
             throw new DocumentQuotaExceededException();
         }
 
+        rejectExtractionForbiddenPdf(file);
+
         Document document = documentRepository.saveAndFlush(
                 new Document(originalFilename, mimeType, sizeBytes));
 
@@ -165,6 +173,61 @@ public class DocumentUploadService {
 
         eventPublisher.publishEvent(new DocumentUploadedEvent(document.getId()));
         return document;
+    }
+
+    /** [Purpose] The 5-byte header every PDF starts with -- same signature check as
+     *  {@code DocumentParser#isPdf}, applied here to the multipart bytes instead of a stored
+     *  {@code Resource}. Content-based on purpose (the declared {@code Content-Type} is accepted
+     *  at face value, AD-5/NR-5, so it cannot pick which uploads need this guard). */
+    private static final byte[] PDF_MAGIC = "%PDF-".getBytes(StandardCharsets.US_ASCII);
+
+    /**
+     * [Purpose] Rejects a PDF whose owner-password permission set forbids text extraction, before
+     *   any {@code documents} row or on-disk file exists (batch review 2026-09-01 security Low-1,
+     *   user decision 2026-09-02).
+     * [Rationale] Runs last in the guard chain (AD-7 order keeps the cheap header checks first;
+     *   this one has to read the file bytes). Three outcomes, deliberately distinguished:
+     *   <ol>
+     *     <li><b>Opens with the empty user password but {@code canExtractContent()} is false</b>
+     *     (the common "copy/extract forbidden" distribution form, owner password only) --
+     *     rejected with {@link DocumentExtractionForbiddenException}. Rejecting here, not at
+     *     parse time, is the point: by parse time the original file is already on disk.</li>
+     *     <li><b>Does not open at all</b> ({@link InvalidPasswordException} -- a real user
+     *     password): NOT this guard's target. It falls through unchanged and fails later in the
+     *     pipeline's existing PARSE_FAILURE path, exactly as before this guard existed.</li>
+     *     <li><b>Not a PDF, or unreadable/corrupt bytes</b>: the guard stays silent -- format
+     *     problems keep their existing failure modes (Tika/parse stage), and this method never
+     *     converts them into a new client-visible rejection.</li>
+     *   </ol>
+     * [Caution] {@code Loader.loadPDF(byte[])} buffers the whole file (&le; {@code
+     *   app.ingest.max-file-size}, 20MB) in heap for the duration of the check and is closed via
+     *   try-with-resources -- the same transient cost {@link #upload}'s existing [Caution] already
+     *   accepts for the disk write, one step earlier.
+     */
+    private void rejectExtractionForbiddenPdf(MultipartFile file) {
+        byte[] bytes;
+        try {
+            bytes = file.getBytes();
+        } catch (IOException e) {
+            return; // unreadable multipart -- let the existing write path surface it as before
+        }
+        if (bytes.length < PDF_MAGIC.length
+                || !Arrays.equals(Arrays.copyOfRange(bytes, 0, PDF_MAGIC.length), PDF_MAGIC)) {
+            return;
+        }
+        try (PDDocument pdf = Loader.loadPDF(bytes)) {
+            if (pdf.isEncrypted() && !pdf.getCurrentAccessPermission().canExtractContent()) {
+                log.warn("추출 금지(owner-password) PDF 업로드 거부 (filename={}, size={})",
+                        file.getOriginalFilename(), bytes.length);
+                throw new DocumentExtractionForbiddenException();
+            }
+        } catch (InvalidPasswordException e) {
+            // A real user password: the document cannot be opened here or at parse time -- not
+            // this guard's target (outcome 2 above). Fall through unchanged.
+        } catch (IOException e) {
+            // Corrupt/odd PDF bytes: keep the pre-existing failure mode (parse-stage FAILED),
+            // never a new upload-time rejection (outcome 3 above).
+        }
     }
 
     /**

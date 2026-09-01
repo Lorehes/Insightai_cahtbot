@@ -71,7 +71,18 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </nav>
         <div className={styles.exit}>
           <Link href="/" className={styles.exitLink}>
-            <span aria-hidden="true">←</span> 채팅으로 나가기
+            {/* Prototype P:48-50 -- decorative chevron; the link's accessible name is the text. */}
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" className={styles.exitIcon}>
+              <path
+                d="M8.5 3 L4.5 7 L8.5 11"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            채팅으로 나가기
           </Link>
         </div>
       </aside>

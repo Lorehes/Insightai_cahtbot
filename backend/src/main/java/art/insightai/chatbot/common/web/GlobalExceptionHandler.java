@@ -5,6 +5,7 @@ import art.insightai.chatbot.chat.domain.ConversationQuotaExceededException;
 import art.insightai.chatbot.chat.domain.InvalidModelException;
 import art.insightai.chatbot.chat.domain.MessageQuotaExceededException;
 import art.insightai.chatbot.rag.domain.DocumentDeleteLockTimeoutException;
+import art.insightai.chatbot.rag.domain.DocumentExtractionForbiddenException;
 import art.insightai.chatbot.rag.domain.DocumentNotFoundException;
 import art.insightai.chatbot.rag.domain.DocumentQuotaExceededException;
 import art.insightai.chatbot.rag.domain.DocumentTooLargeException;
@@ -137,6 +138,19 @@ public class GlobalExceptionHandler {
     private static final String UNSUPPORTED_DOCUMENT_TYPE_CLIENT_MESSAGE =
             "unsupported document MIME type";
 
+    /**
+     * Fixed 400 body (batch review 2026-09-01 security Low-1, user decision 2026-09-02): names the
+     * actual reason -- extraction is forbidden by the document itself -- so an admin does not
+     * mistake the file for broken or "unsupported". Deliberately distinct from {@link
+     * #UNSUPPORTED_DOCUMENT_TYPE_CLIENT_MESSAGE}; no caller-supplied content embedded (INC-007).
+     * Public, unlike the sibling client-message constants above, so the AC-20 HTTP-layer case in
+     * {@code DocumentUploadControllerIntegrationTest} can assert the response {@code detail}
+     * against this constant by reference instead of a mirrored literal (user flow 2026-09-02) --
+     * the client-visible wording and the test that protects it cannot drift apart.
+     */
+    public static final String DOCUMENT_EXTRACTION_FORBIDDEN_CLIENT_MESSAGE =
+            "the PDF forbids text extraction (copy-protected by its owner) — remove the restriction and upload again";
+
     @ExceptionHandler(ConversationNotFoundException.class)
     public ProblemDetail handleConversationNotFound(ConversationNotFoundException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
@@ -176,6 +190,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(InvalidDocumentFilenameException.class)
     public ProblemDetail handleInvalidDocumentFilename(InvalidDocumentFilenameException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, INVALID_DOCUMENT_FILENAME_CLIENT_MESSAGE);
+    }
+
+    @ExceptionHandler(DocumentExtractionForbiddenException.class)
+    public ProblemDetail handleDocumentExtractionForbidden(DocumentExtractionForbiddenException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, DOCUMENT_EXTRACTION_FORBIDDEN_CLIENT_MESSAGE);
     }
 
     @ExceptionHandler(DocumentTooLargeException.class)

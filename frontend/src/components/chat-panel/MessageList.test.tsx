@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MessageList, type ChatMessage } from "./MessageList";
 
 /**
@@ -14,9 +15,56 @@ function assistantMessage(content: string, overrides: Partial<ChatMessage> = {})
 }
 
 describe("MessageList", () => {
+  // Name frozen by `design-tokens.test.ts`'s `D1_BASELINE_NAMES` (Spec §Tech Review AD-2) --
+  // T7 replaces the old single-sentence placeholder this test used to check, but the name
+  // itself must not change.
   it("shows a placeholder when there are no messages yet", () => {
     render(<MessageList messages={[]} />);
-    expect(screen.getByText("대화를 시작해보세요.")).toBeInTheDocument();
+    expect(screen.queryByText("대화를 시작해보세요.")).not.toBeInTheDocument();
+  });
+
+  describe("empty state (card T7)", () => {
+    it("[chat-prototype-port:AC-12] renders the empty-state title and description, and renders 0 of the old placeholder sentence", () => {
+      render(<MessageList messages={[]} />);
+
+      expect(screen.getByText("무엇을 찾아드릴까요?")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "사내 문서에 근거해서 답변합니다. 답변 아래에는 참고한 문서와 페이지가 함께 표시됩니다.",
+        ),
+      ).toBeInTheDocument();
+      // INC-013 (absence proof): the replaced sentence must be gone, not merely coexisting.
+      expect(screen.queryByText("대화를 시작해보세요.")).not.toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-13] renders the three example-question chips with exact literal labels", () => {
+      render(<MessageList messages={[]} />);
+
+      // Spec §6 discriminating-power requirement 4 -- literals re-typed here, not read off a
+      // component-exported constant, so a wrong constant value would still fail this test.
+      expect(screen.getByRole("button", { name: "연차 이월 규정이 어떻게 되나요?" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "법인카드 사용 한도는?" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "보안 교육 이수 기한 알려줘" })).toBeInTheDocument();
+    });
+
+    it("calls onExampleSelect with a clicked chip's exact, untransformed label", async () => {
+      const user = userEvent.setup();
+      const onExampleSelect = jest.fn();
+      render(<MessageList messages={[]} onExampleSelect={onExampleSelect} />);
+
+      await user.click(screen.getByRole("button", { name: "법인카드 사용 한도는?" }));
+
+      expect(onExampleSelect).toHaveBeenCalledTimes(1);
+      expect(onExampleSelect).toHaveBeenCalledWith("법인카드 사용 한도는?");
+    });
+
+    it("does not throw when a chip is clicked and onExampleSelect is omitted", async () => {
+      const user = userEvent.setup();
+      render(<MessageList messages={[]} />);
+
+      await user.click(screen.getByRole("button", { name: "보안 교육 이수 기한 알려줘" }));
+      // No assertion beyond "did not throw" -- `onExampleSelect` is optional (`?.()` call).
+    });
   });
 
   it("renders a user message as plain text, not interpreted as markdown", () => {
@@ -386,6 +434,189 @@ describe("MessageList", () => {
       expect(
         screen.getByText('<img src=x onerror="window.__sourcePwned = true">'),
       ).toBeInTheDocument();
+    });
+  });
+
+  describe("bubble/avatar structure, streaming badge/caret, RAG-OFF badge/notice (card T6)", () => {
+    it("[chat-prototype-port:AC-26] carries the 나/어시스턴트 role labels in the DOM for both roles (regression -- visual hiding is allowed, absence is not)", () => {
+      render(
+        <MessageList
+          messages={[
+            { id: "u1", role: "user", content: "질문입니다" },
+            assistantMessage("답변입니다"),
+          ]}
+        />,
+      );
+
+      expect(screen.getByText("나")).toBeInTheDocument();
+      expect(screen.getByText("어시스턴트")).toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-15] renders the streaming badge while streaming, and 0 while done (반대 조건)", () => {
+      const { rerender } = render(
+        <MessageList messages={[assistantMessage("partial", { streamStatus: "streaming" })]} />,
+      );
+      expect(screen.getByText("생성 중 · 토큰 스트리밍")).toBeInTheDocument();
+
+      rerender(<MessageList messages={[assistantMessage("full", { streamStatus: "done" })]} />);
+      expect(screen.queryByText("생성 중 · 토큰 스트리밍")).not.toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-16] renders exactly one stream-caret testid while streaming, and 0 once the stream ends (반대 조건)", () => {
+      const { rerender } = render(
+        <MessageList messages={[assistantMessage("partial", { streamStatus: "streaming" })]} />,
+      );
+      expect(screen.getAllByTestId("stream-caret")).toHaveLength(1);
+
+      rerender(<MessageList messages={[assistantMessage("full", { streamStatus: "done" })]} />);
+      expect(screen.queryAllByTestId("stream-caret")).toHaveLength(0);
+    });
+
+    it("[chat-prototype-port:AC-24] renders the RAG-OFF badge when ragEnabled is false, and 0 when ragEnabled is true (반대 조건)", () => {
+      const { rerender } = render(
+        <MessageList messages={[assistantMessage("answer")]} ragEnabled={false} />,
+      );
+      expect(screen.getByText("RAG 근거 미사용 · 모델 일반 지식")).toBeInTheDocument();
+
+      rerender(<MessageList messages={[assistantMessage("answer")]} ragEnabled={true} />);
+      expect(screen.queryByText("RAG 근거 미사용 · 모델 일반 지식")).not.toBeInTheDocument();
+    });
+
+    // Not an AC-24 clause -- AC-24's own "켜진 대화에서는 0개" requirement is already covered by
+    // the `ragEnabled={true}` branch of the sibling test just above. This test's own subject is
+    // orthogonal to that: what happens when `ragEnabled` is omitted (`undefined`) entirely, a
+    // third state introduced by T14's second rework round removing the prior `= true` default
+    // (review `2026-09-01_chat-prototype-port-T14-round2.md` Medium-2 -- this test used to be
+    // named/tagged as if it proved "defaults to ON", which stopped being true the moment that
+    // default was deleted; it only ever proved the OFF badge's absence, for the wrong reason).
+    it("does not render the RAG-OFF badge when ragEnabled is omitted (undefined claims neither ON nor OFF, unlike the old removed `= true` default)", () => {
+      render(<MessageList messages={[assistantMessage("answer")]} />);
+      expect(screen.queryByText("RAG 근거 미사용 · 모델 일반 지식")).not.toBeInTheDocument();
+    });
+
+    // [chat-prototype-port:AC-44] dev-qa-tester addition (T16 2회차 QA, 2026-09-02) -- the sibling
+    // test just above already proves `TopBadge` stays silent on `ragEnabled === undefined`, but
+    // nothing in this suite proved the *notice box* (`MessageList.tsx:308`'s `ragEnabled === false`
+    // branch) does the same. That gap mattered specifically for T16: review Block High-1
+    // (`docs/review/2026-09-01_chat-prototype-port-T16.md`) named this exact element
+    // (`MessageList.tsx:304-331`, "RAG-OFF 안내 박스") as one of three fallout surfaces that kept
+    // asserting a stale ON/OFF fact while `ChatWorkspace`'s header honestly said "확인 불가" --
+    // the fix (`ChatWorkspace.tsx:838`, gating the `ragEnabled` prop to `undefined` while
+    // `isRagUnverified`) only actually closes that hole if this element treats `undefined` the same
+    // inert way `TopBadge` does. `ChatWorkspace.test.tsx`'s own AC-44 test cannot observe this by
+    // itself -- its fixture conversation has zero messages (`mockedGetMessages.mockResolvedValue([])`),
+    // so neither `TopBadge` nor this notice box ever mounts in that test at all; the "확인 불가"
+    // scenario there only ever exercises the header toggle and `ChatPanel`'s composer hint.
+    it("does not render the RAG-OFF notice box when ragEnabled is omitted (undefined claims neither ON nor OFF, same as the badge above)", () => {
+      render(<MessageList messages={[assistantMessage("answer")]} />);
+      expect(screen.queryByText(/^문서 근거 없이 답변했습니다\./)).not.toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-25] renders the RAG-OFF notice box when ragEnabled is false, and 0 when ragEnabled is true (반대 조건)", () => {
+      const { rerender } = render(
+        <MessageList messages={[assistantMessage("answer")]} ragEnabled={false} />,
+      );
+      expect(screen.getByText(/^문서 근거 없이 답변했습니다\./)).toBeInTheDocument();
+
+      rerender(<MessageList messages={[assistantMessage("answer")]} ragEnabled={true} />);
+      expect(screen.queryByText(/^문서 근거 없이 답변했습니다\./)).not.toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-25] renders the RAG-OFF notice while still streaming, not only once the stream ends (matches the prototype's showAnswerOff gating -- ragOn alone, no isDone split)", () => {
+      render(
+        <MessageList
+          messages={[assistantMessage("partial", { streamStatus: "streaming", sources: null })]}
+          ragEnabled={false}
+        />,
+      );
+      expect(screen.getByText(/^문서 근거 없이 답변했습니다\./)).toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-19] renders a role=alert error card with the fixed title and a 다시 시도 button for a streamStatus: error message, and 0 while done (반대 조건)", () => {
+      const { rerender } = render(
+        <MessageList messages={[assistantMessage("partial", { streamStatus: "error" })]} />,
+      );
+      const errorCard = screen.getByRole("alert");
+      expect(within(errorCard).getByText("응답을 받지 못했습니다")).toBeInTheDocument();
+      expect(within(errorCard).getByRole("button", { name: "다시 시도" })).toBeInTheDocument();
+      // Already-arrived content stays on screen, unmodified (Spec §8 R-5).
+      expect(screen.getByText("partial")).toBeInTheDocument();
+      // INC-013 absence proof -- the retired inline error sentence must be gone, not merely
+      // coexisting with the new card.
+      expect(screen.queryByText("메시지를 가져오지 못했습니다.")).not.toBeInTheDocument();
+
+      rerender(<MessageList messages={[assistantMessage("full", { streamStatus: "done" })]} />);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-20] clicking 다시 시도 calls onRetry with the exact content of the immediately preceding user message", async () => {
+      const user = userEvent.setup();
+      const onRetry = jest.fn();
+      render(
+        <MessageList
+          messages={[
+            { id: "u1", role: "user", content: "연차 이월 규정이 어떻게 되나요?" },
+            assistantMessage("", { id: "a1", streamStatus: "error" }),
+          ]}
+          onRetry={onRetry}
+        />,
+      );
+
+      await user.click(screen.getByRole("button", { name: "다시 시도" }));
+
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      // Character-for-character equality against the raw preceding user message, not a
+      // substring/regex match (Spec §6 판별력 요건: "정규화 후 비교 금지", same convention the
+      // example-chip AC-14 test above already applies).
+      expect(onRetry).toHaveBeenCalledWith("연차 이월 규정이 어떻게 되나요?");
+    });
+
+    it("[chat-prototype-port:AC-20] disables the 다시 시도 button while isSending is true, and re-enables it once false (반대 조건)", () => {
+      const { rerender } = render(
+        <MessageList
+          messages={[
+            { id: "u1", role: "user", content: "hi" },
+            assistantMessage("", { id: "a1", streamStatus: "error" }),
+          ]}
+          isSending={true}
+        />,
+      );
+      expect(screen.getByRole("button", { name: "다시 시도" })).toBeDisabled();
+
+      rerender(
+        <MessageList
+          messages={[
+            { id: "u1", role: "user", content: "hi" },
+            assistantMessage("", { id: "a1", streamStatus: "error" }),
+          ]}
+          isSending={false}
+        />,
+      );
+      expect(screen.getByRole("button", { name: "다시 시도" })).toBeEnabled();
+    });
+
+    it("does not throw when 다시 시도 is clicked and onRetry is omitted", async () => {
+      const user = userEvent.setup();
+      render(<MessageList messages={[assistantMessage("partial", { streamStatus: "error" })]} />);
+
+      await user.click(screen.getByRole("button", { name: "다시 시도" }));
+      // No assertion beyond "did not throw" -- `onRetry` is optional (`?.()` call), same
+      // convention `onExampleSelect`'s own omitted-callback test above already covers.
+    });
+
+    it("renders a user message inside a bubble container and an assistant message next to a decorative avatar (structure, no AC number)", () => {
+      render(
+        <MessageList
+          messages={[
+            { id: "u1", role: "user", content: "질문" },
+            assistantMessage("답변"),
+          ]}
+        />,
+      );
+
+      expect(screen.getByTestId("message-u1").className).toMatch(/userBubble/);
+      const avatar = screen.getByText("in");
+      expect(avatar).toHaveAttribute("aria-hidden", "true");
     });
   });
 });

@@ -3,6 +3,7 @@ package art.insightai.chatbot.rag.ingest;
 import art.insightai.chatbot.common.config.AppProperties;
 import art.insightai.chatbot.common.config.TestAppPropertiesFactory;
 import art.insightai.chatbot.rag.domain.Document;
+import art.insightai.chatbot.rag.domain.DocumentExtractionForbiddenException;
 import art.insightai.chatbot.rag.domain.DocumentQuotaExceededException;
 import art.insightai.chatbot.rag.domain.DocumentRepository;
 import art.insightai.chatbot.rag.domain.DocumentTooLargeException;
@@ -10,6 +11,10 @@ import art.insightai.chatbot.rag.domain.DocumentUploadedEvent;
 import art.insightai.chatbot.rag.domain.InvalidDocumentFilenameException;
 import art.insightai.chatbot.rag.domain.UnsupportedDocumentTypeException;
 
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
+import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -24,6 +29,7 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.util.unit.DataSize;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -110,6 +116,81 @@ class DocumentUploadServiceTest {
         ArgumentCaptor<DocumentUploadedEvent> eventCaptor = ArgumentCaptor.forClass(DocumentUploadedEvent.class);
         verify(eventPublisher).publishEvent(eventCaptor.capture());
         assertThat(eventCaptor.getValue().documentId()).isEqualTo(result.getId());
+    }
+
+    // 아래 3건은 배치 리뷰 2026-09-01 security Low-1 / 사용자 결정 2026-09-02(추출 금지 PDF 거부)의
+    // 증거다 -- document-ingestion:AC-20 (Done 이후 신설, 사용자 승인 2026-09-02).
+    // PDF 는 테스트 안에서 PDFBox 로 생성한다(바이너리 픽스처 없음). MIME 은 허용값을 그대로 쓴다 --
+    // 가드는 선언 Content-Type 이 아니라 %PDF- 매직바이트로 판별하므로(스푸핑 대비) 이 조합이
+    // 오히려 판별 방식 자체를 증명한다. 뒤 2건(사용자 암호·일반 PDF 통과)은 AC-20 뒷문장
+    // 「무엇을 거부하지 않는가」의 경계 증거다.
+    @Test
+    @DisplayName("[document-ingestion:AC-20] 추출 금지(owner-password) PDF 는 행·파일·이벤트 없이 DocumentExtractionForbiddenException 으로 거부된다")
+    void rejectsExtractionForbiddenPdfWithoutRowFileOrEvent() throws IOException {
+        // given: opens with the empty user password, but canExtractContent=false
+        AccessPermission noExtract = new AccessPermission();
+        noExtract.setCanExtractContent(false);
+        byte[] pdf = pdfBytes(new StandardProtectionPolicy("owner-secret", "", noExtract));
+        MockMultipartFile file = new MockMultipartFile("file", "protected.pdf", ALLOWED_MIME_TYPE, pdf);
+
+        // when / then
+        assertThatThrownBy(() -> service.upload(file))
+                .isInstanceOf(DocumentExtractionForbiddenException.class);
+        verify(documentRepository, never()).saveAndFlush(any());
+        verify(eventPublisher, never()).publishEvent(any());
+        assertThat(listFiles(uploadDir)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("[document-ingestion:AC-20] 사용자 암호가 걸린(열리지 않는) PDF 는 업로드 가드의 대상이 아니다 -- 기존대로 업로드는 통과하고 파싱 단계에서 실패한다")
+    void letsUserPasswordProtectedPdfThroughTheUploadGuard() throws IOException {
+        // given: a real user password -- Loader.loadPDF("") cannot open it (InvalidPasswordException)
+        byte[] pdf = pdfBytes(new StandardProtectionPolicy("owner-secret", "user-secret", new AccessPermission()));
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        MockMultipartFile file = new MockMultipartFile("file", "locked.pdf", ALLOWED_MIME_TYPE, pdf);
+
+        // when
+        Document result = service.upload(file);
+
+        // then: the guard stays silent -- the existing PARSE_FAILURE path owns this case
+        assertThat(result.getStatus().name()).isEqualTo("PENDING");
+        verify(eventPublisher).publishEvent(any(DocumentUploadedEvent.class));
+    }
+
+    @Test
+    @DisplayName("[document-ingestion:AC-20] 암호가 없는 일반 PDF 는 추출 금지 가드를 그대로 통과한다")
+    void letsPlainPdfThroughTheUploadGuard() throws IOException {
+        // given
+        byte[] pdf = pdfBytes(null);
+        when(documentRepository.saveAndFlush(any(Document.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        MockMultipartFile file = new MockMultipartFile("file", "plain.pdf", ALLOWED_MIME_TYPE, pdf);
+
+        // when
+        Document result = service.upload(file);
+
+        // then
+        assertThat(result.getStatus().name()).isEqualTo("PENDING");
+        verify(eventPublisher).publishEvent(any(DocumentUploadedEvent.class));
+    }
+
+    /** One-page PDF built in-memory; {@code policy} null = unencrypted. */
+    private static byte[] pdfBytes(StandardProtectionPolicy policy) throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            doc.addPage(new PDPage());
+            if (policy != null) {
+                doc.protect(policy);
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    /** Non-recursive listing of {@code dir} -- upload-dir emptiness check for the reject cases. */
+    private static List<Path> listFiles(Path dir) throws IOException {
+        try (var stream = Files.list(dir)) {
+            return stream.toList();
+        }
     }
 
     @Test

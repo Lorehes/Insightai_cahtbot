@@ -4,12 +4,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import art.insightai.chatbot.common.web.GlobalExceptionHandler;
 import art.insightai.chatbot.rag.ingest.ChunkRepository;
 import art.insightai.chatbot.support.AnonymousUserCleanup;
 import art.insightai.chatbot.support.DocumentRowCounter;
 import art.insightai.chatbot.support.IntegrationTestBase;
 import com.jayway.jsonpath.JsonPath;
 
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
+import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -24,6 +29,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -37,9 +43,10 @@ import java.util.UUID;
  * [Purpose] End-to-end coverage of {@code POST /api/admin/documents} (document-ingestion Spec
  *   Tech Review T5) through the real servlet filter chain against a real database and a real
  *   filesystem write: the success response shape (document-ingestion:AC-1), the id-derived storage
- *   path (document-ingestion:AC-4), and both
+ *   path (document-ingestion:AC-4), and the
  *   rejection branches leaving zero trace in either {@code documents} or the upload directory
- *   (document-ingestion:AC-2 MIME, document-ingestion:AC-3 application-level size). The
+ *   (document-ingestion:AC-2 MIME, document-ingestion:AC-3 application-level size,
+ *   document-ingestion:AC-20 extraction-forbidden PDF). The
  *   container-level half of AC-3 ({@code MaxUploadSizeExceededException}) is deliberately NOT
  *   exercised here -- see {@link DocumentUploadContainerSizeLimitIntegrationTest}'s class Javadoc
  *   for why {@code MockMvc} structurally cannot reach that path.
@@ -331,6 +338,43 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
+    @DisplayName("[document-ingestion:AC-20] 추출 금지(owner-password) PDF 업로드는 400을 반환하고 documents 행도 "
+            + "upload-dir 파일도 남기지 않으며 응답 detail 은 추출 금지를 명시한 고정 문구다")
+    void rejectsExtractionForbiddenPdfLeavingNoRowOrFile() throws Exception {
+        // given: an owner-password PDF that opens with the empty user password but forbids
+        // extraction -- the same PDFBox-built fixture shape as DocumentUploadServiceTest's
+        // unit-level AC-20 case, replayed here through the real HTTP/GlobalExceptionHandler path.
+        // The declared Content-Type is application/pdf (a real allowed-mime-types entry) so the
+        // MIME whitelist passes and the extraction guard is provably the branch that rejects.
+        long documentsBefore = DocumentRowCounter.countDocuments(jdbcTemplate);
+        long uploadDirEntriesBefore = countUploadDirEntries();
+        AccessPermission noExtract = new AccessPermission();
+        noExtract.setCanExtractContent(false);
+        byte[] pdf = extractionForbiddenPdfBytes(noExtract);
+        MockMultipartFile file = new MockMultipartFile("file", "protected.pdf", "application/pdf", pdf);
+
+        // when
+        MvcResult result = mockMvc.perform(multipart("/api/admin/documents").file(file))
+                .andExpect(status().isBadRequest())
+                .andReturn();
+        anonymousUserCleanup.track(result);
+
+        // then: no row, no file -- AC-20's "행·파일 생성 전에 거부" at the layers this class can
+        // observe; the no-event half is DocumentUploadServiceTest's mock-verified claim
+        assertThat(DocumentRowCounter.countDocuments(jdbcTemplate)).isEqualTo(documentsBefore);
+        assertThat(countUploadDirEntries()).isEqualTo(uploadDirEntriesBefore);
+
+        // then: 400 body contract -- asserted against the production constant BY REFERENCE, not a
+        // mirrored literal like the sibling constants above (user flow 2026-09-02; the constant
+        // was made public for exactly this assertion, so wording and test cannot drift apart).
+        // What this pins beyond "some constant is used": the handler maps this exception to a
+        // fixed client string at all, instead of echoing e.getMessage() (the INC-007 leak shape).
+        String responseBody = result.getResponse().getContentAsString();
+        String detail = JsonPath.read(responseBody, "$.detail");
+        assertThat(detail).isEqualTo(GlobalExceptionHandler.DOCUMENT_EXTRACTION_FORBIDDEN_CLIENT_MESSAGE);
+    }
+
+    @Test
     @DisplayName("[document-ingestion:AC-3] app.ingest.max-file-size(20MB) 초과·컨테이너 한도(25MB) 이하 파일은 413을 반환하고 "
             + "documents 행도 upload-dir 파일도 남기지 않는다")
     void rejectsFileOverApplicationLimitButUnderContainerLimit() throws Exception {
@@ -398,6 +442,21 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
 
     private Path uploadedFilePath(UUID documentId) {
         return uploadDir.resolve(documentId.toString());
+    }
+
+    /**
+     * [Purpose] One-page PDF built in-memory, protected with an owner password ("owner-secret"),
+     *   an empty user password, and the given permission set -- mirrors {@code
+     *   DocumentUploadServiceTest#pdfBytes}'s AC-20 fixture, no binary fixture file needed.
+     */
+    private static byte[] extractionForbiddenPdfBytes(AccessPermission permissions) throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            doc.addPage(new PDPage());
+            doc.protect(new StandardProtectionPolicy("owner-secret", "", permissions));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
     }
 
     /**

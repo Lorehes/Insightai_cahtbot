@@ -1,31 +1,30 @@
-import { SessionStatus } from "@/components/session-status/SessionStatus";
 import { ChatWorkspace } from "@/components/chat-workspace/ChatWorkspace";
 import styles from "./page.module.css";
 
 /**
- * [Purpose] Card F1's session-wiring proof (chat:AC-40) plus the full chat screen Spec §5
- *   "화면 (D3)" describes: sidebar (create/select/delete, chat:AC-38), model picker
- *   (chat:AC-39), and card F2's stream/markdown transcript (chat:AC-36, chat:AC-37) -- all
- *   composed by {@link ChatWorkspace} (card F3).
- * [Caution] The F1 session-proof section above the chat screen is kept deliberately -- it is
- *   still the only place `chatbot_sid` cookie persistence is demonstrated in the UI, and no
- *   card has asked for its removal. `page.tsx` itself stays a thin composition root with no
- *   test of its own (matching F1/F2's existing pattern) -- all real logic/state lives in
+ * [Purpose] Card T2 (`chat-prototype-port`): screen root that renders only the real chat screen
+ *   ({@link ChatWorkspace}, card F3, Spec §5 "화면 (D3)") -- the earlier dev-only top section
+ *   (an `insight-chat` `h1` plus the F1 session-bootstrap proof under a `채팅` `h2`) is gone,
+ *   and `SessionStatus` is no longer rendered here at all (`chat-prototype-port:AC-1`).
+ * [Rationale] `SessionStatus` is intentionally **not deleted** -- its component/CSS/test files
+ *   are untouched, only this file's render call is removed. Deleting the file would drop
+ *   `SessionStatus.test.tsx`'s test names and flip the already-closed `design-system:AC-18`
+ *   (✅) to red; Spec §8 R-1a reserves that file's deletion for a separate, explicit user
+ *   decision this card does not make. This file's own tests live in `page.test.tsx` (Spec §8
+ *   AD-3 split -- it owns the two h1/h2-absence clauses, while `ChatWorkspace.test.tsx` owns
+ *   the third, the `aside`/main sibling-structure clause); all real logic/state lives in
  *   {@link ChatWorkspace} and what it renders, each independently tested.
- * [AC] chat:AC-36, chat:AC-37, chat:AC-38, chat:AC-39, chat:AC-40
+ * [Caution] `ChatWorkspace`'s own root already renders its `<aside>` (sidebar) and its content
+ *   `<div>` as siblings -- this file must not insert anything between them.
+ *   `page.module.css`'s `.page` only supplies the outer full-height frame those two sit inside;
+ *   making the sidebar/content actually reach the viewport bottom is `ChatWorkspace`'s own CSS,
+ *   out of this card's scope (T3+).
+ * [AC] chat-prototype-port:AC-1
  */
 export default function Home() {
   return (
     <main className={styles.page}>
-      <h1>insight-chat</h1>
-      <section>
-        <h2>세션 부트스트랩 확인 (F1)</h2>
-        <SessionStatus />
-      </section>
-      <section>
-        <h2>채팅</h2>
-        <ChatWorkspace />
-      </section>
+      <ChatWorkspace />
     </main>
   );
 }

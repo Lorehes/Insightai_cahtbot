@@ -1,25 +1,81 @@
-/* Card F3 conversation sidebar. Rewired onto the --app-* token layer (design-system D4) --
-   no hardcoded colors/spacing. */
+/* Card T3 (chat-prototype-port) -- ported from `insight-chat 프로토타입.html`'s ChatScreen
+   sidebar block (P:30-79: branding, new-conversation button, "최근 대화" label, list rows, empty
+   state, session footer). Rewired onto the --app-* token layer -- no hardcoded colors/spacing/
+   radius/font-size (design-system:AC-5, chat-prototype-port:AC-27). Prototype px values with no
+   exact token are expressed as `calc()` on the nearest token or as `rem` (fixed control
+   dimensions), never as a new literal. */
 
 .sidebar {
   display: flex;
   flex-direction: column;
-  gap: var(--app-gap-sm);
-  width: 16rem;
-  flex-shrink: 0;
-  padding: var(--app-gap-md);
+  width: var(--app-rail-width);
+  height: 100%;
+  flex: none;
   border-right: 1px solid var(--app-line);
+  background: var(--app-bg-sunken);
 }
 
+/* P:32 -- `padding:20px 18px 14px`: 20 = --app-gap + --app-gap-xs, 18 -> --app-gap (16),
+   14 -> --app-gap-md (12). */
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap);
+  padding: calc(var(--app-gap) + var(--app-gap-xs)) var(--app-gap) var(--app-gap-md);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-sm);
+}
+
+.brandDot {
+  width: 9px;
+  height: 9px;
+  border-radius: var(--app-radius-pill);
+  background: var(--app-accent);
+  flex-shrink: 0;
+}
+
+/* P:35 -- 17px/700 -> nearest --app-type-* step (16px, card). */
+.brandName {
+  font-size: var(--app-type-card-size);
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--app-text);
+}
+
+.brandTagline {
+  font-size: var(--app-type-meta-size);
+  font-weight: 500;
+  color: var(--app-text-muted);
+}
+
+/* P:38 -- outlined 44px button that inverts on hover. */
 .newButton {
-  padding: var(--app-gap-sm) var(--app-gap-md);
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-xs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--app-gap-sm);
+  height: 44px;
+  border: 1px solid var(--app-text);
+  border-radius: var(--app-radius-sm);
   background: var(--app-surface);
   color: var(--app-text);
   cursor: pointer;
   font: inherit;
-  font-weight: bold;
+  font-size: var(--app-type-body-size);
+  font-weight: 600;
+}
+
+.newButton:hover:not(:disabled) {
+  background: var(--app-text);
+  color: var(--app-text-inverse);
+}
+
+.newButtonIcon {
+  flex-shrink: 0;
 }
 
 .newButton:focus-visible,
@@ -38,65 +94,142 @@
   opacity: 0.5;
 }
 
+/* P:46 -- `padding:4px 10px 12px`: 10 -> --app-gap-sm (8). */
+.listSection {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--app-gap-xs) var(--app-gap-sm) var(--app-gap-md);
+}
+
+/* P:47 -- 11px/700 tracked caption -> --app-type-label-size (12px). */
+.listLabel {
+  padding: var(--app-gap-sm) var(--app-gap-sm) var(--app-gap-sm);
+  font-size: var(--app-type-label-size);
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: var(--app-text-faint);
+}
+
+.status {
+  padding: var(--app-gap-sm);
+  font-size: var(--app-type-meta-size);
+  color: var(--app-text-muted);
+}
+
+/* P:50 -- `gap:2px` = half of --app-gap-xs. */
 .list {
   display: flex;
   flex-direction: column;
-  gap: var(--app-gap-sm);
+  gap: calc(var(--app-gap-xs) / 2);
   list-style: none;
-  overflow-y: auto;
 }
 
+/* P:52 -- one 40px row (`2.5rem`) that carries the hover/selected background for *both* the
+   select button and the delete icon inside it. `gap:6px`/right `padding:6px` = --app-gap-sm - 2.
+   The selected row is found via `:has([aria-current])` so the row background follows the same
+   `aria-current` the select button already exposes (no second piece of state). */
 .item {
   display: flex;
   align-items: center;
-  gap: var(--app-gap-sm);
+  gap: calc(var(--app-gap-sm) - 2px);
+  height: 2.5rem;
+  padding: 0 calc(var(--app-gap-sm) - 2px) 0 0;
+  border-radius: var(--app-radius-sm);
 }
 
+.item:hover,
+.item:has([aria-current="true"]) {
+  background: var(--app-surface-strong);
+}
+
+/* P:53 -- borderless, full-height text button; 14px -> --app-type-meta-size (13px), the same
+   rounding `MessageList.module.css` uses for every 14px prototype value. */
 .selectButton,
 .selectButtonActive {
   flex: 1;
   min-width: 0;
-  padding: var(--app-gap-sm);
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-xs);
-  background: var(--app-surface);
-  color: var(--app-text);
+  height: 100%;
+  padding: 0 0 0 var(--app-gap-md);
+  border: 0;
+  border-radius: var(--app-radius-sm);
+  background: none;
+  color: var(--app-text-body);
   cursor: pointer;
   font: inherit;
+  font-size: var(--app-type-meta-size);
   text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Selected state is marked by weight + border thickness, not color alone -- aria-current
-   carries the same information non-visually (accessibility default: color must not be the
-   only channel). Background/border-color use the accent wash (Spec §Tech Review AD-5's
-   selectButtonActive exception) -- the prototype script paints a selected nav item in the
-   accent family. */
+/* Selected state is marked by weight + ink color + the row background above, and non-visually
+   by `aria-current` (accessibility default: color must not be the only channel). */
 .selectButtonActive {
-  font-weight: bold;
-  background: var(--app-accent-wash);
-  border-color: var(--app-accent-line);
-  border-width: 2px;
-}
-
-.deleteButton {
-  padding: var(--app-gap-sm);
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-xs);
-  background: var(--app-surface);
+  font-weight: 600;
   color: var(--app-text);
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--app-type-label-size);
 }
 
+/* P:54 -- 26px (`1.625rem`) circular icon button, faint until hovered. */
+.deleteButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.625rem;
+  height: 1.625rem;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: var(--app-radius-pill);
+  background: none;
+  color: var(--app-text-faint);
+  cursor: pointer;
+}
+
+.deleteButton:hover:not(:disabled) {
+  background: var(--app-line);
+  color: var(--app-text);
+}
+
+/* P:65 -- `margin:12px 10px`: 10 -> --app-gap-sm. */
 .empty {
+  margin: var(--app-gap-md) var(--app-gap-sm);
+  font-size: var(--app-type-meta-size);
+  line-height: 1.6;
   color: var(--app-text-muted);
 }
 
+/* P:69 -- `padding:14px 18px 18px;gap:6px`: 14 -> --app-gap-md, 18 -> --app-gap, 6 = sm - 2. */
+.footer {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--app-gap-sm) - 2px);
+  padding: var(--app-gap-md) var(--app-gap) var(--app-gap);
+  border-top: 1px solid var(--app-line);
+}
+
+.footerLine {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-sm);
+  font-size: var(--app-type-meta-size);
+  color: var(--app-text-muted);
+}
+
+.footerIcon {
+  flex-shrink: 0;
+}
+
+.footerSub {
+  font-size: var(--app-type-label-size);
+  color: var(--app-text-faint);
+}
+
 .error {
+  margin: 0 var(--app-gap);
+  font-size: var(--app-type-meta-size);
+  line-height: 1.5;
   color: var(--app-status-danger);
-  font-weight: bold;
+  font-weight: 600;
 }

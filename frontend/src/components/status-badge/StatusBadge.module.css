@@ -1,32 +1,72 @@
-/* design-system D5: status badge primitive. Tokens only, per Spec §2 status mapping table --
-   no hardcoded colors/spacing. */
+/* design-system D5: status badge primitive. Tokens only for color/radius/font-size, per Spec §2
+   status mapping table. Shape ported from the prototype's StatusBadge blob (`353949a8`): a 26px
+   pill, `padding:0 11px 0 9px`, icon + label, with the ring drawn as an inset box-shadow so the
+   badge's outer size never changes between states. The label text stays load-bearing (see
+   `StatusBadge.tsx`'s [Rationale]) -- the icon is decorative. */
 
 .pending,
 .parsing,
 .embedding,
 .indexed,
 .failed {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 11px 0 9px;
   border-radius: var(--app-radius-pill);
-  padding: var(--app-gap-xs) var(--app-gap-sm);
   font-size: var(--app-type-label-size);
   font-weight: var(--app-type-label-weight);
+  white-space: nowrap;
 }
 
+.icon {
+  display: block;
+  flex: none;
+}
+
+/* P:40 -- sunken, hairline ring. */
 .pending {
+  background: var(--app-bg-sunken);
   color: var(--app-status-neutral);
+  box-shadow: inset 0 0 0 1px var(--app-line);
 }
 
+/* P:31 -- outlined in ink, spinner icon. */
 .parsing,
 .embedding {
+  background: var(--app-surface);
   color: var(--app-status-active);
+  box-shadow: inset 0 0 0 1.5px var(--app-status-active);
 }
 
+.parsing .icon,
+.embedding .icon {
+  animation: sb-spin 0.9s linear infinite;
+}
+
+/* P:22 -- solid ink. */
 .indexed {
-  color: var(--app-status-ok);
+  background: var(--app-status-ok);
+  color: var(--app-text-inverse);
 }
 
+/* P:50 -- danger wash + ring. */
 .failed {
-  color: var(--app-status-danger);
   background: var(--app-status-danger-wash);
+  color: var(--app-status-danger);
+  box-shadow: inset 0 0 0 1.5px var(--app-status-danger);
+}
+
+@keyframes sb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .parsing .icon,
+  .embedding .icon {
+    animation: none;
+  }
 }

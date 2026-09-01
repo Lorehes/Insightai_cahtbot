@@ -161,19 +161,25 @@ describe("DOM anchor contract (design-system:AC-16, AC-17)", () => {
     }
   });
 
-  it("[design-system:AC-17] #model-selector is a <select> whose option values exactly match the catalog's id set", async () => {
+  it("[design-system:AC-17] #model-selector is a popover trigger whose option ids exactly match the catalog's id set", async () => {
+    const user = userEvent.setup();
     render(<ChatWorkspace />);
 
-    await waitFor(() => {
-      const select = document.querySelector("#model-selector");
-      expect(select).not.toBeNull();
-      expect(select?.tagName).toBe("SELECT");
-      expect((select as HTMLSelectElement).disabled).toBe(false);
+    const trigger = await waitFor(() => {
+      const el = document.querySelector("#model-selector");
+      expect(el).not.toBeNull();
+      expect(el?.tagName).toBe("BUTTON");
+      expect((el as HTMLButtonElement).disabled).toBe(false);
+      return el as HTMLButtonElement;
     });
 
-    const select = document.querySelector("#model-selector") as HTMLSelectElement;
-    const optionValues = Array.from(select.options).map((o) => o.value);
-    expect(optionValues).toEqual(CATALOG.map((m) => m.id));
+    await user.click(trigger);
+
+    const listbox = await screen.findByRole("listbox");
+    const optionIds = within(listbox)
+      .getAllByRole("option")
+      .map((o) => o.getAttribute("data-model-id"));
+    expect(optionIds).toEqual(CATALOG.map((m) => m.id));
     // If this ever became the display label instead of the wire id, it would still read
     // "Solar Pro 4"/"Other Model" to a human -- the id/displayName mismatch in CATALOG above
     // is what makes that swap fail here instead of passing by coincidence.

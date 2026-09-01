@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.UUID;
 
 import org.springframework.ai.document.DefaultContentFormatter;
+import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
 import org.springframework.stereotype.Component;
 
 import art.insightai.chatbot.rag.domain.Document;
@@ -47,12 +48,12 @@ import art.insightai.chatbot.rag.domain.Document;
  *   </ol>
  * [Caution] {@link DocumentParser}'s Javadoc documents that {@code TikaDocumentReader} never
  *   exposes any page-boundary metadata at all -- not even a document-level page count -- for any
- *   format in the ingestion MIME whitelist. So with the current pipeline, {@link #resolvePage}
- *   always returns {@code null}. That is a fully valid outcome under AC-8's literal text ("Tika가
- *   페이지 경계를 제공하지 않는 문서 형식이면 값은 null이다") and Spec §7 OQ-5's "best-effort" framing --
- *   not a defect in this class. Producing a real page number would require a page-aware reader
- *   for at least the PDF branch (e.g. Spring AI's {@code PagePdfDocumentReader}, from a module
- *   this project does not currently depend on) and is out of this card's scope.
+ *   format it handles. Since 2026-09-01 (user decision "A + C") PDFs bypass Tika and are read page
+ *   by page with {@code PagePdfDocumentReader}, so {@link #resolvePage} returns a real 1-based page
+ *   number for PDF chunks and {@code null} for every other format -- the latter is still a fully
+ *   valid outcome under AC-8's literal text ("Tika가 페이지 경계를 제공하지 않는 문서 형식이면 값은
+ *   null이다") and Spec §7 OQ-5's "best-effort" framing. The null-page defenses below (items 1 and
+ *   3 above) therefore remain load-bearing for DOCX/PPTX/XLSX/TXT/MD.
  */
 @Component
 public class ChunkMetadataBuilder {
@@ -96,6 +97,16 @@ public class ChunkMetadataBuilder {
             chunk.getMetadata().put(KEY_DEPT, DEPT_ALL);
             chunk.getMetadata().put(KEY_ACL, ACL_ALL);
             chunk.getMetadata().put(KEY_PAGE, resolvePage(chunk));
+            // Batch review 2026-09-01 Medium-2: once the page number is promoted to AC-8's own
+            // `page` key, the PDF reader's raw keys are removed. Left in place they reach two
+            // sinks they don't belong in: the EMBED-mode formatted content (BL-023 proved
+            // metadata is prepended to the embedding input, so PDF chunks would embed
+            // "page_number: N" / "file_name: <upload UUID>" noise non-PDF chunks don't have) and
+            // the vector_store_bgem3.metadata column (an internal storage identifier persisted
+            // for no reader). Non-PDF chunks never have these keys -- remove() is a no-op there.
+            chunk.getMetadata().remove(PagePdfDocumentReader.METADATA_START_PAGE_NUMBER);
+            chunk.getMetadata().remove(PagePdfDocumentReader.METADATA_END_PAGE_NUMBER);
+            chunk.getMetadata().remove(PagePdfDocumentReader.METADATA_FILE_NAME);
             excludeNullablePageFromFormatting(chunk);
         }
         return chunks;
@@ -104,7 +115,9 @@ public class ChunkMetadataBuilder {
     /**
      * [Purpose] Keeps the {@code page} metadata key out of the text handed to the embedding
      *   model, while leaving it in {@code chunk.getMetadata()} untouched.
-     * [Rationale] {@code page} is null on every chunk today (see class Javadoc), and the real
+     * [Rationale] {@code page} is null on every non-PDF chunk (PDF chunks carry a real number
+     *   since 2026-09-01 -- see class Javadoc -- and excluding a non-null value here is harmless,
+     *   so this exclusion stays correct and load-bearing for both cases), and the real
      *   (non-stub) embedding path -- {@code OpenAiEmbeddingModel.getEmbeddingContent} ->
      *   {@code Document.getFormattedContent} -> {@code DefaultContentFormatter.metadataFilter}
      *   (this chunk type's {@code MetadataMode} is {@code EMBED}, confirmed by this fix's own
@@ -143,11 +156,30 @@ public class ChunkMetadataBuilder {
 
     /**
      * [Purpose] Resolves the page number for a single chunk, best-effort.
-     * [Rationale] Always {@code null} today -- see class [Caution]. Isolated into its own method
-     *   (rather than inlining {@code null} in {@link #build}) so a future card that adds a
-     *   page-aware reader for one format has a single seam to change.
+     * [Rationale] {@link DocumentParser} reads PDFs page by page with {@code PagePdfDocumentReader}
+     *   (2026-09-01, user decision "A + C"), which stamps {@code page_number} ({@link
+     *   PagePdfDocumentReader#METADATA_START_PAGE_NUMBER}, 1-based) on each page's source document;
+     *   {@code TokenTextSplitter} copies that metadata onto every chunk it cuts from that page, so
+     *   it is read back here and promoted to AC-8's {@code page} key. Every other format still
+     *   arrives through Tika with no such key and resolves to {@code null} -- AC-8's "Tika가 페이지
+     *   경계를 제공하지 않는 문서 형식이면 값은 null이다" branch, unchanged. {@link #build} removes
+     *   the reader's raw keys right after this promotion (batch review 2026-09-01 Medium-2), so
+     *   this method is the only consumer they ever have; a non-numeric value (never produced by
+     *   the reader, but the metadata map is untyped) is treated as absent rather than failing the
+     *   whole document.
      */
     private Integer resolvePage(org.springframework.ai.document.Document chunk) {
+        Object raw = chunk.getMetadata().get(PagePdfDocumentReader.METADATA_START_PAGE_NUMBER);
+        if (raw instanceof Number number) {
+            return number.intValue();
+        }
+        if (raw instanceof String value) {
+            try {
+                return Integer.parseInt(value.trim());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
         return null;
     }
 }

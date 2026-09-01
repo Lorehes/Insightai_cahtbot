@@ -1,62 +1,74 @@
-/* eval-usage-dashboard card U3: admin usage dashboard screen. Tokens only, no hardcoded
-   colors/spacing/radius/font-size (design-system:AC-10/AC-11) -- mirrors
+/* eval-usage-dashboard card U3: admin usage dashboard screen, ported from the prototype's
+   AdminUsage blob (`8ad404c9`) and its MetricCard blob (`a56e7940`). Tokens only for
+   color/radius/font-size (design-system:AC-10/AC-11) -- mirrors
    `document-manager/DocumentManager.module.css`'s own token discipline for the same shared
-   /admin shell. There is no dedicated "warn" status token in globals.css (only
-   --app-status-danger / --app-status-danger-wash exist), so .metricCardWarn/.warningBanner
-   reuse those danger tokens -- the same visual language this screen's own error banner and
-   `DocumentManager`'s row-error indicator already use for "something needs attention". */
+   /admin shell; px values are the prototype's own structural dimensions, and every prototype
+   14px text value maps to --app-type-meta-size (13px). There is no dedicated "warn" status
+   token in globals.css (only --app-status-danger / --app-status-danger-wash exist), so
+   .metricCardWarn/.warningBanner reuse those danger tokens -- the same visual language this
+   screen's own error banner and `DocumentManager`'s row-error indicator already use. */
 
+/* P:25 -- `padding:32px 32px 32px;max-width:1240px`. */
 .page {
   display: flex;
   flex-direction: column;
   gap: var(--app-gap-lg);
-  max-width: var(--app-answer-max);
+  max-width: 1240px;
+  padding: var(--app-pad-screen) var(--app-pad-screen) var(--app-gap-xl);
 }
 
 .header {
   display: flex;
   flex-direction: column;
-  gap: var(--app-gap-xs);
+  gap: 6px;
 }
 
 .header h1 {
+  margin: 0;
   font-size: var(--app-type-page-size);
   font-weight: var(--app-type-page-weight);
+  letter-spacing: -0.6px;
 }
 
 .description {
+  margin: 0;
   color: var(--app-text-muted);
-  font-size: var(--app-type-meta-size);
+  font-size: var(--app-type-body-size);
+  line-height: 1.6;
+  text-wrap: pretty;
 }
 
+/* P:41 -- `padding:18px 20px`, bottom-aligned controls, wraps on narrow widths. */
 .filterBar {
   display: flex;
   align-items: flex-end;
   flex-wrap: wrap;
   gap: var(--app-gap);
-  padding: var(--app-gap-lg);
+  padding: 18px 20px;
   border: 1px solid var(--app-line);
   border-radius: var(--app-radius-md);
   background: var(--app-surface);
 }
 
+/* P:42-45 -- 12px/700 caption over a 42px date input. */
 .dateField {
   display: flex;
   flex-direction: column;
-  gap: var(--app-gap-xs);
+  gap: 6px;
   font-size: var(--app-type-label-size);
-  font-weight: var(--app-type-label-weight);
+  font-weight: 700;
   color: var(--app-text-muted);
 }
 
 .dateField input {
-  padding: var(--app-gap-sm) var(--app-gap-md);
+  height: 42px;
+  padding: 0 var(--app-gap-md);
   border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-xs);
+  border-radius: var(--app-radius-sm);
   background: var(--app-surface);
   color: var(--app-text);
   font: inherit;
-  font-size: var(--app-type-body-size);
+  font-size: var(--app-type-meta-size);
 }
 
 .dateField input:focus-visible {
@@ -65,32 +77,41 @@
 }
 
 .dateSeparator {
-  padding-bottom: var(--app-gap-sm);
+  padding-bottom: var(--app-gap-md);
   color: var(--app-text-faint);
 }
 
+/* P:51 -- `gap:6px;padding-bottom:1px`. */
 .presets {
   display: flex;
-  gap: var(--app-gap-xs);
+  gap: 6px;
+  padding-bottom: 1px;
 }
 
+/* P:53 -- 42px outlined presets; the active one is outlined in ink on a sunken fill (plus
+   `aria-pressed`, never color alone). */
 .presetButton,
 .presetButtonActive {
-  padding: var(--app-gap-sm) var(--app-gap-md);
+  height: 42px;
+  padding: 0 14px;
   border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-xs);
+  border-radius: var(--app-radius-sm);
   background: var(--app-surface);
   color: var(--app-text-muted);
   cursor: pointer;
   font: inherit;
-  font-size: var(--app-type-body-size);
+  font-size: var(--app-type-meta-size);
+  font-weight: 500;
+}
+
+.presetButton:hover {
+  border-color: var(--app-text);
 }
 
 .presetButtonActive {
   border-color: var(--app-text);
   background: var(--app-bg-sunken);
   color: var(--app-text);
-  font-weight: 600;
 }
 
 .presetButton:focus-visible,
@@ -99,16 +120,18 @@
   outline-offset: 2px;
 }
 
+/* P:57 -- 42px accent apply button, pushed to the far right. */
 .applyButton {
   margin-left: auto;
-  padding: var(--app-gap-sm) var(--app-gap-lg);
+  height: 42px;
+  padding: 0 22px;
   border: 0;
-  border-radius: var(--app-radius-xs);
+  border-radius: var(--app-radius-sm);
   background: var(--app-accent);
   color: var(--app-text-inverse);
   cursor: pointer;
   font: inherit;
-  font-size: var(--app-type-body-size);
+  font-size: var(--app-type-meta-size);
   font-weight: 600;
 }
 
@@ -121,6 +144,7 @@
   outline-offset: 2px;
 }
 
+/* P:62-66 -- 4 shimmering 132px card placeholders on the same grid as the metric cards. */
 .loadingState .skeletonGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
@@ -136,56 +160,97 @@
     var(--app-surface-hover),
     var(--app-surface-strong)
   );
-  background-size: 200% 100%;
-  animation: shimmer 1.4s ease-in-out infinite;
+  background-size: 420px 100%;
+  animation: au-shimmer 1.3s linear infinite;
 }
 
-@keyframes shimmer {
+@keyframes au-shimmer {
   0% {
-    background-position: 200% 0;
+    background-position: -420px 0;
   }
   100% {
-    background-position: -200% 0;
+    background-position: 420px 0;
   }
 }
 
-.errorState,
-.emptyState {
+/* P:71-82 -- danger wash + 1.5px inset ring, title 16/600, retry outlined in danger. */
+.errorState {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--app-gap-xs);
-  padding: var(--app-gap-lg);
-  border: 1px solid var(--app-line);
+  gap: 6px;
+  padding: 22px;
   border-radius: var(--app-radius-md);
-  background: var(--app-surface);
+  background: var(--app-status-danger-wash);
+  box-shadow: inset 0 0 0 1.5px var(--app-status-danger);
 }
 
-.errorState h2,
-.emptyState h2 {
-  font-size: var(--app-type-section-size);
-  font-weight: var(--app-type-section-weight);
+.errorState h2 {
+  margin: 0;
+  font-size: var(--app-type-card-size);
+  font-weight: 600;
+  color: var(--app-status-danger);
 }
 
-.errorState p,
-.emptyState p {
-  color: var(--app-text-muted);
+.errorState p {
+  margin: 0;
+  font-size: var(--app-type-meta-size);
+  line-height: 1.6;
+  color: var(--app-status-danger);
+  text-wrap: pretty;
 }
 
 .retryButton {
   align-self: flex-start;
-  padding: var(--app-gap-sm) var(--app-gap-md);
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-xs);
-  background: var(--app-surface);
-  color: var(--app-text);
+  margin-top: var(--app-gap-sm);
+  height: 38px;
+  padding: 0 var(--app-gap);
+  border: 1.5px solid var(--app-status-danger);
+  border-radius: var(--app-radius-sm);
+  background: none;
+  color: var(--app-status-danger);
   cursor: pointer;
   font: inherit;
+  font-size: var(--app-type-meta-size);
+  font-weight: 600;
+}
+
+.retryButton:hover {
+  background: var(--app-status-danger);
+  color: var(--app-text-inverse);
 }
 
 .retryButton:focus-visible {
   outline: 2px solid var(--app-text);
   outline-offset: 2px;
+}
+
+/* P:87-90 -- centered, dashed, sunken. */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 72px 24px;
+  border: 1px dashed var(--app-line-strong);
+  border-radius: var(--app-radius-md);
+  background: var(--app-bg-sunken);
+  text-align: center;
+}
+
+.emptyState h2 {
+  margin: 0;
+  font-size: var(--app-type-card-size);
+  font-weight: 600;
+}
+
+.emptyState p {
+  margin: 0;
+  max-width: 420px;
+  color: var(--app-text-muted);
+  font-size: var(--app-type-meta-size);
+  line-height: 1.65;
+  text-wrap: pretty;
 }
 
 .metricsGrid {
@@ -195,25 +260,31 @@
   margin-bottom: var(--app-gap-lg);
 }
 
+/* MetricCard blob P:37 -- `gap:10px;padding:20px 22px`, hairline drawn as an inset ring. */
 .metricCard,
 .metricCardWarn {
   display: flex;
   flex-direction: column;
-  gap: var(--app-gap-xs);
-  padding: var(--app-gap-lg);
-  border: 1px solid var(--app-line);
+  gap: 10px;
+  min-width: 0;
+  padding: 20px 22px;
   border-radius: var(--app-radius-md);
   background: var(--app-surface);
+  box-shadow: inset 0 0 0 1px var(--app-line);
 }
 
+/* MetricCard blob P:19 -- danger wash + 1.5px ring. */
 .metricCardWarn {
-  border-color: var(--app-status-danger);
   background: var(--app-status-danger-wash);
+  box-shadow: inset 0 0 0 1.5px var(--app-status-danger);
 }
 
 .metricLabel {
-  font-size: var(--app-type-label-size);
-  font-weight: var(--app-type-label-weight);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--app-type-meta-size);
+  font-weight: 600;
   color: var(--app-text-muted);
 }
 
@@ -221,31 +292,60 @@
   color: var(--app-status-danger);
 }
 
+.metricLabelIcon {
+  display: block;
+  flex: none;
+}
+
+/* MetricCard blob P:40 -- 32px/700 value; --app-type-page-size (28px) is the nearest token. */
 .metricValue {
-  font-size: var(--app-type-section-size);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+  min-width: 0;
+  font-size: var(--app-type-page-size);
   font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.6px;
   color: var(--app-text);
+  overflow-wrap: anywhere;
 }
 
 .metricCardWarn .metricValue {
   color: var(--app-status-danger);
 }
 
+/* MetricCard blob P:41 -- 15px unit beside the value. */
 .metricUnit {
-  font-size: var(--app-type-meta-size);
-  font-weight: 400;
+  font-size: var(--app-type-body-size);
+  font-weight: 500;
+  letter-spacing: 0;
   color: var(--app-text-muted);
 }
 
-.metricHint {
-  font-size: var(--app-type-meta-size);
-  color: var(--app-text-faint);
+.metricCardWarn .metricUnit {
+  font-weight: 600;
+  color: var(--app-status-danger);
 }
 
+.metricHint {
+  margin: 0;
+  font-size: var(--app-type-meta-size);
+  line-height: 1.5;
+  color: var(--app-text-muted);
+  text-wrap: pretty;
+}
+
+.metricCardWarn .metricHint {
+  color: var(--app-status-danger);
+}
+
+/* P:103 -- `gap:11px;padding:14px 16px`. */
 .warningBanner {
   display: flex;
-  gap: var(--app-gap-sm);
-  padding: var(--app-gap-md);
+  gap: 11px;
+  padding: 14px var(--app-gap);
   margin-bottom: var(--app-gap-lg);
   border: 1px solid var(--app-status-danger);
   border-radius: var(--app-radius-sm);
@@ -253,20 +353,33 @@
   color: var(--app-status-danger);
 }
 
+.warningBannerIcon {
+  display: block;
+  flex: none;
+  margin-top: 2px;
+}
+
 .warningBanner p {
   margin: 0;
   font-size: var(--app-type-meta-size);
   line-height: 1.6;
+  text-wrap: pretty;
 }
 
+.warningBanner strong {
+  font-weight: 700;
+}
+
+/* P:112 -- section title over the table. */
 .tableHeading {
-  margin-bottom: var(--app-gap-md);
+  margin: 0 0 var(--app-gap-md);
   font-size: var(--app-type-section-size);
   font-weight: var(--app-type-section-weight);
+  letter-spacing: -0.2px;
 }
 
 .tableWrap {
-  overflow: hidden;
+  overflow-x: auto;
   border: 1px solid var(--app-line);
   border-radius: var(--app-radius-md);
   background: var(--app-surface);
@@ -275,28 +388,36 @@
 .table {
   width: 100%;
   border-collapse: collapse;
+  font-size: var(--app-type-meta-size);
 }
 
-.table th,
+/* P:117-121 -- 12px/700 muted headers on a sunken band. */
+.table th {
+  padding: 12px var(--app-gap);
+  background: var(--app-bg-sunken);
+  border-bottom: 1px solid var(--app-line);
+  text-align: left;
+  font-size: var(--app-type-label-size);
+  font-weight: 700;
+  color: var(--app-text-muted);
+  white-space: nowrap;
+}
+
+/* P:125-130 -- `padding:14px 16px`, hairline-soft separators, cost column in ink/600. */
 .table td {
-  padding: var(--app-gap-sm) var(--app-gap-md);
+  padding: 14px var(--app-gap);
   border-bottom: 1px solid var(--app-line-soft);
   text-align: left;
-  font-size: var(--app-type-body-size);
-}
-
-.table thead tr {
-  background: var(--app-bg-sunken);
-}
-
-.table th {
-  font-size: var(--app-type-label-size);
-  font-weight: var(--app-type-label-weight);
-  color: var(--app-text-muted);
+  color: var(--app-text-body);
 }
 
 .table tbody tr:last-child td {
   border-bottom: none;
+}
+
+.table td:last-child {
+  font-weight: 600;
+  color: var(--app-text);
 }
 
 .alignRight {
@@ -309,6 +430,7 @@
   color: var(--app-text);
 }
 
+/* P:160 -- meta line under the table. */
 .rangeLabel {
   margin-top: var(--app-gap-md);
   color: var(--app-text-faint);
@@ -325,4 +447,10 @@
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeletonCard {
+    animation: none;
+  }
 }

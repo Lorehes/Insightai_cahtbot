@@ -1,25 +1,241 @@
-/* Card F3 screen composition -- lays out the sidebar beside the model-picker toolbar + chat
-   panel (Spec §5 "화면 (D3)" elements ①-④ as one screen). Rewired onto the --app-* token
-   layer (design-system D4) -- no hardcoded colors/spacing. */
+/* Card F3 screen composition -- lays out the sidebar beside the topbar + chat panel (Spec §5
+   "화면 (D3)" elements ①-④ as one screen). Rewired onto the --app-* token layer (design-system
+   D4) -- no hardcoded colors/spacing.
+   Card T4 (chat-prototype-port) replaces `.toolbar` with `.header` (conversation title `h1` +
+   relocated model picker, chat-prototype-port:AC-8) and adds the `.historyLoading` shimmer
+   skeleton (chat-prototype-port:AC-41) -- both ported from `insight-chat 프로토타입.html`'s
+   `<header>` (P:85-96) and `LoadingState` (P:166-173) blocks. Every declaration below still
+   resolves to `var(--app-*)` (chat-prototype-port:AC-27) except the handful of px dimensions
+   the repo's own convention already treats as exempt (border/outline widths, and here the
+   skeleton line heights/`background-size`, which must match the `ic-shimmer` keyframe's
+   `-420px`/`420px` amplitude exactly to animate correctly -- not a themable spacing value).
+   Prototype px values with no exact token are expressed as `calc()` on the nearest token or as
+   `rem` (both outside the AC-27 scanner's px-literal scope by design), never as a new literal.
+
+   Card T5 (chat-prototype-port) adds `.ragToggle`/`.ragToggleOn` and their label children,
+   ported from the same `<header>` block's `RagToggle` (P:112-134). The prototype's sliding-knob
+   graphic (an external design-system `Toggle` component, P:120/P:131) is approximated here with
+   a pure-CSS `.ragKnob` track+thumb (`aria-hidden`, decorative) so the control reads as a switch
+   at a glance; the on/off distinction is still carried by the label text and `aria-checked`, not
+   by the knob alone (accessibility default "색만으로 정보 전달 금지"). `height: 38px` is the same
+   fixed-control literal `.brandDot`/`.newButton` in `ConversationSidebar.module.css` use. */
 
 .workspace {
   display: flex;
-  gap: var(--app-gap-md);
-  align-items: flex-start;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--app-bg);
+  color: var(--app-text);
 }
 
+/* P:82 -- `flex:1;display:flex;flex-direction:column;min-width:0`. `min-height: 0` lets the
+   transcript inside `<ChatPanel>` become the one scrolling region instead of the whole page. */
 .main {
   display: flex;
   flex-direction: column;
-  gap: var(--app-gap-md);
   flex: 1;
   min-width: 0;
+  min-height: 0;
 }
 
-.toolbar {
+/* P:85 -- topbar: `--app-topbar-height` tall, `--app-pad-screen` horizontal inset, hairline
+   below. */
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap);
+  height: var(--app-topbar-height);
+  flex: none;
+  padding: 0 var(--app-pad-screen);
+  border-bottom: 1px solid var(--app-line);
+  background: var(--app-bg);
+}
+
+/* P:86 -- 17px/600 in the prototype; mapped to the nearest existing --app-type-* step (16px,
+   --app-type-card-size), same "reuse nearest existing token" call `ConversationSidebar`'s
+   `.brandName` (card T3) already made. Weight (600) matches via --app-type-card-weight. */
+.title {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--app-type-card-size);
+  font-weight: var(--app-type-card-weight);
+  letter-spacing: -0.2px;
+  color: var(--app-text);
+}
+
+/* P:146-147/P:167 -- the skeleton sits where the transcript will, so it shares the transcript's
+   own inset (`--app-pad-screen`) and answer column width (`--app-answer-max`). */
+.historyLoading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap-md);
+  width: 100%;
+  max-width: calc(var(--app-answer-max) + var(--app-pad-screen) * 2);
+  align-self: center;
+  padding: var(--app-gap-xl) var(--app-pad-screen) 0;
+}
+
+.skeletonLine {
+  height: 14px;
+  border-radius: var(--app-radius-pill);
+  background: linear-gradient(90deg, var(--app-surface-strong), var(--app-surface-hover), var(--app-surface-strong));
+  background-size: 420px 100%;
+  animation: ic-shimmer 1.3s linear infinite;
+}
+
+/* Per-line widths are the prototype's own values (P:168-171), not invented -- varying width per
+   line is what makes a text-skeleton read as "lines of text" rather than a single loading bar. */
+.skeletonLine1 {
+  width: 38%;
+}
+
+.skeletonLine2 {
+  width: 92%;
+}
+
+.skeletonLine3 {
+  width: 84%;
+}
+
+.skeletonLine4 {
+  width: 64%;
+}
+
+.historyLoadingText {
+  margin-top: var(--app-gap-xs);
+  font-size: var(--app-type-meta-size);
+  color: var(--app-text-muted);
+}
+
+/* The pre-adoption-decision status line (`ChatWorkspace.tsx`, rendered instead of `<ChatPanel>`
+   until the mount effect decides) -- same inset as `.historyLoading` so it does not jump when
+   the skeleton replaces it. */
+.pendingStatus {
+  width: 100%;
+  max-width: calc(var(--app-answer-max) + var(--app-pad-screen) * 2);
+  align-self: center;
+  padding: var(--app-gap-xl) var(--app-pad-screen) 0;
+  font-size: var(--app-type-meta-size);
+  color: var(--app-text-muted);
+}
+
+/* P:114/P:125 -- pill switch. padding "0 8px 0 14px" -> 0 --app-gap-sm 0 --app-gap (8/16),
+   gap 11px -> --app-gap-md (12). The 1px/1.5px rings are inset box-shadows (as in the
+   prototype), so the control's outer size never changes between states. */
+.ragToggle {
   display: flex;
   align-items: center;
   gap: var(--app-gap-md);
-  padding-bottom: var(--app-gap-sm);
-  border-bottom: 1px solid var(--app-line);
+  flex: none;
+  height: 38px;
+  padding: 0 var(--app-gap-sm) 0 var(--app-gap);
+  border: 0;
+  border-radius: var(--app-radius-pill);
+  background: var(--app-bg-sunken);
+  box-shadow: inset 0 0 0 1px var(--app-line);
+  color: var(--app-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ragToggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ragToggle:focus-visible {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+/* On state: accent wash + a thicker accent ring (P:114), alongside the label text switching
+   between two literal strings and the knob moving -- never color alone. */
+.ragToggleOn {
+  background: var(--app-accent-wash);
+  box-shadow: inset 0 0 0 1.5px var(--app-accent-line);
+}
+
+.ragToggleLabel {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  text-align: left;
+}
+
+.ragToggleTitle {
+  font-size: var(--app-type-meta-size);
+  font-weight: 700;
+  color: var(--app-text-muted);
+}
+
+.ragToggleOn .ragToggleTitle {
+  color: var(--app-accent);
+}
+
+/* 11px in the prototype (P:117/128) has no exact --app-type-* match -- mapped to the nearest
+   existing step, --app-type-label-size (12px). */
+.ragToggleSubtitle {
+  font-size: var(--app-type-label-size);
+  font-weight: 500;
+  color: var(--app-text-faint);
+}
+
+.ragToggleOn .ragToggleSubtitle {
+  color: var(--app-accent);
+}
+
+/* Decorative switch graphic standing in for the prototype's `Toggle` import (P:120/P:131,
+   rendered there at 48x32 scaled by 0.72 = ~35x23). Track/thumb sizes are `rem` -- fixed
+   control dimensions with no spacing-token equivalent. */
+.ragKnob {
+  position: relative;
+  flex: none;
+  width: 2.125rem;
+  height: 1.25rem;
+  border-radius: var(--app-radius-pill);
+  background: var(--app-line-strong);
+  transition: background 0.15s ease;
+}
+
+.ragKnob::after {
+  content: "";
+  position: absolute;
+  top: 0.125rem;
+  left: 0.125rem;
+  width: 1rem;
+  height: 1rem;
+  border-radius: var(--app-radius-pill);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow);
+  transition: transform 0.15s ease;
+}
+
+.ragToggleOn .ragKnob {
+  background: var(--app-accent);
+}
+
+.ragToggleOn .ragKnob::after {
+  transform: translateX(0.875rem);
+}
+
+/* chat-prototype-port:AC-40 (partial -- `ic-shimmer` only; `ic-caret`/`ic-spin` are T6's scope,
+   §8 D-8). Reduce, don't hide: the skeleton lines stay visible with no motion, since AC-41 still
+   requires 4 of them while loading regardless of this media query. The knob's transition is not
+   an `ic-*` keyframe but is stopped here too for the same reason. */
+@media (prefers-reduced-motion: reduce) {
+  .skeletonLine {
+    animation: none;
+  }
+
+  .ragKnob,
+  .ragKnob::after {
+    transition: none;
+  }
 }

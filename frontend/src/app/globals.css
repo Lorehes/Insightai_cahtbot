@@ -104,6 +104,11 @@
   --app-radius-xs: var(--radius-xs);
   --app-radius-sm: var(--radius-sm);
   --app-radius-md: var(--radius-md);
+  /* Added 2026-09-01: the prototype's own app.css has no -lg alias, but the chat screen's user
+     bubble (P:198, `18px 18px 6px 18px`) maps its 18px corners to the base --radius-lg step (20px)
+     via this alias -- without it the bubble's `var(--app-radius-lg)` resolved to nothing and the
+     corners rendered square. */
+  --app-radius-lg: var(--radius-lg);
   --app-radius-pill: var(--radius-full);
   --app-shadow: var(--shadow-card);
 
@@ -145,4 +150,40 @@ body {
 a {
   color: inherit;
   text-decoration: none;
+}
+
+/* chat-prototype-port Spec §8 D-8 / §5 Affected Surfaces -- ported verbatim from the prototype's
+   <style> block (`insight-chat 프로토타입.html` P:21-23, decoded 2026-09-01 against resource
+   uuid 52c01b12-fd4b-4200-96bd-3b9bde8010b9, same method T3/T4 established). Card T4 added
+   `ic-shimmer` alone; card T6 adds the other two the prototype actually uses in this screen
+   (`ic-caret`, `ic-spin` -- `ic-dots` is still not ported, no usage in the chat screen, §8
+   D-5/D-8), landing in the same commit as their consumers (`chat-panel/MessageList.module.css`'s
+   `.streamCaret`/`.streamingBadgeIcon`, chat-prototype-port:AC-16/AC-15) so no unused keyframe
+   is committed ahead of its use (§8 AD-8). `prefers-reduced-motion: reduce` handling lives with
+   each consumer, not here (chat-prototype-port:AC-40) -- see that file's own reduce block for
+   why the caret is stopped, not removed (§8 D-8's "캐럿의 특수성"). */
+@keyframes ic-shimmer {
+  0% {
+    background-position: -420px 0;
+  }
+  100% {
+    background-position: 420px 0;
+  }
+}
+
+@keyframes ic-caret {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes ic-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

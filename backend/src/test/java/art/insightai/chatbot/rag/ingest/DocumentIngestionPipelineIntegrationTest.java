@@ -66,11 +66,11 @@ class DocumentIngestionPipelineIntegrationTest {
     }
 
     @Test
-    @DisplayName("[document-ingestion:AC-8] 실제 2페이지 PDF를 파싱·청킹해도 page는 null이다 (Tika가 페이지 경계를 제공하지 않음, AD-9)")
-    void parsesAndChunksPdfFixtureWithNullPageDespiteRealPageBoundary() {
-        // given: a genuinely 2-page PDF -- SampleDocumentFixturesTest already confirms Tika
-        // itself can see xmpTPg:NPages=2 for these exact bytes, so a non-null page here would
-        // only be possible if TikaDocumentReader propagated that count, which it does not.
+    @DisplayName("[document-ingestion:AC-8] 실제 2페이지 PDF를 파싱·청킹하면 페이지별로 나뉘고 각 청크의 page 에 1-based 페이지 번호가 채워진다")
+    void parsesAndChunksPdfFixtureWithRealPageNumbers() {
+        // given: a genuinely 2-page PDF (SampleDocumentFixturesTest confirms xmpTPg:NPages=2 for
+        // these exact bytes). Since 2026-09-01 DocumentParser reads PDFs page by page with
+        // PagePdfDocumentReader instead of Tika, so the page boundary is no longer lost.
         Resource resource = new ClassPathResource("fixtures/" + SampleDocumentFixtures.PDF_FILENAME);
         Document documentEntity = new Document(
                 SampleDocumentFixtures.PDF_FILENAME, SampleDocumentFixtures.PDF_MIME_TYPE, 0L);
@@ -80,22 +80,37 @@ class DocumentIngestionPipelineIntegrationTest {
         List<org.springframework.ai.document.Document> chunks = chunker.chunk(parsed);
         List<org.springframework.ai.document.Document> stamped = metadataBuilder.build(chunks, documentEntity);
 
-        // then: Tika still collapses the 2 pages into a single parsed Document (DocumentParser
-        // [Caution]), and both pages' text survives into the chunk stream
-        assertThat(parsed).hasSize(1);
+        // then: one parsed Document per page, and both pages' text survives into the chunk stream
+        assertThat(parsed).hasSize(2);
         String combinedText = chunks.stream()
                 .map(org.springframework.ai.document.Document::getText)
                 .collect(Collectors.joining());
         assertThat(combinedText).contains(SampleDocumentFixtures.KEYWORD_PDF);
         assertThat(combinedText).contains(SampleDocumentFixtures.KNOWN_SENTENCE_PDF_PAGE_2);
 
-        // then: every real chunk still gets all 6 AC-8 keys, page null despite the real 2 pages
+        // then: every chunk gets all 6 AC-8 keys, and page is the real 1-based page it was cut from
+        // -- the page-2 sentence must sit on a page-2 chunk, and no chunk claims a page outside 1..2
         assertThat(stamped).isNotEmpty();
-        for (org.springframework.ai.document.Document chunk : stamped) {
+        for (int i = 0; i < stamped.size(); i++) {
+            org.springframework.ai.document.Document chunk = stamped.get(i);
             Map<String, Object> metadata = chunk.getMetadata();
-            assertThat(metadata).containsKey("page");
-            assertThat(metadata.get("page")).isNull();
+            assertThat(metadata)
+                    .containsEntry("document_id", documentEntity.getId().toString())
+                    .containsEntry("filename", SampleDocumentFixtures.PDF_FILENAME)
+                    .containsEntry("chunk_index", i)
+                    .containsEntry("dept", "ALL")
+                    .containsEntry("acl", "ALL");
+            assertThat(metadata.get("page")).isInstanceOf(Integer.class);
+            assertThat((Integer) metadata.get("page")).isBetween(1, 2);
+            // Batch review 2026-09-01 Medium-2: the PDF reader's raw keys must be stripped after
+            // the `page` promotion -- left in place they leak into the EMBED-mode formatted
+            // content and the stored metadata column.
+            assertThat(metadata).doesNotContainKeys("page_number", "end_page_number", "file_name");
         }
+        assertThat(stamped)
+                .filteredOn(chunk -> chunk.getText().contains(SampleDocumentFixtures.KNOWN_SENTENCE_PDF_PAGE_2))
+                .isNotEmpty()
+                .allSatisfy(chunk -> assertThat(chunk.getMetadata().get("page")).isEqualTo(2));
     }
 
     /**

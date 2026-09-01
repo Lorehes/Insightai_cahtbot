@@ -165,44 +165,54 @@ export function DocumentManager() {
         </p>
       </header>
 
+      {/* Prototype P:42-56 -- one row: glyph | title + hint | 파일 선택 | 업로드. Same
+          elements/labels as before, regrouped for layout only. */}
       <section className={styles.uploadForm} aria-label="문서 업로드">
-        <div className={styles.uploadHeading}>
-          <span aria-hidden="true">📄</span> 문서 업로드
+        <svg width="22" height="22" viewBox="0 0 14 14" aria-hidden="true" className={styles.uploadIcon}>
+          <path d="M7 11 V3 M4 6 L7 3 L10 6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+          <path
+            d="M1.6 9.6 V11.4 a0.8 0.8 0 0 0 0.8 0.8 h9.2 a0.8 0.8 0 0 0 0.8 -0.8 V9.6"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.2"
+            strokeLinecap="round"
+          />
+        </svg>
+        <div className={styles.uploadText}>
+          <div className={styles.uploadHeading}>문서 업로드</div>
+          <p className={styles.uploadHint}>
+            {selectedFile
+              ? `선택됨 · ${selectedFile.name} (${formatSize(selectedFile.size)})`
+              : // 프로토타입 원문은 "최대 50 MB" -- 실제 백엔드 한도는 application.yaml의
+                // app.ingest.max-file-size: 20MB (document-ingestion Spec §7 OQ-2 확정값)이라 그
+                // 값으로 정정해 표시한다. 프로토타입 문구를 그대로 두면 20~50MB 파일이 이 화면의
+                // 안내만 보고는 통과할 것으로 오인했다가 413으로 거부당한다.
+                //
+                // review 2026-08-30 T11 1R Medium-1(correctness): 프로토타입 원문("PDF, DOCX,
+                // TXT, MD")도 4종만 나열해 실제 백엔드 허용 6종(PPTX·XLSX 누락) 중 2종을 빠뜨리고
+                // 있었다 -- ACCEPTED_FILE_EXTENSIONS와 함께 6종 전부로 정정.
+                "PDF, DOCX, PPTX, XLSX, TXT, MD · 파일당 최대 20 MB"}
+          </p>
         </div>
-        <p className={styles.uploadHint}>
-          {selectedFile
-            ? `선택됨 · ${selectedFile.name} (${formatSize(selectedFile.size)})`
-            : // 프로토타입 원문은 "최대 50 MB" -- 실제 백엔드 한도는 application.yaml의
-              // app.ingest.max-file-size: 20MB (document-ingestion Spec §7 OQ-2 확정값)이라 그
-              // 값으로 정정해 표시한다. 프로토타입 문구를 그대로 두면 20~50MB 파일이 이 화면의
-              // 안내만 보고는 통과할 것으로 오인했다가 413으로 거부당한다.
-              //
-              // review 2026-08-30 T11 1R Medium-1(correctness): 프로토타입 원문("PDF, DOCX,
-              // TXT, MD")도 4종만 나열해 실제 백엔드 허용 6종(PPTX·XLSX 누락) 중 2종을 빠뜨리고
-              // 있었다 -- ACCEPTED_FILE_EXTENSIONS와 함께 6종 전부로 정정.
-              "PDF, DOCX, PPTX, XLSX, TXT, MD · 파일당 최대 20 MB"}
-        </p>
-        <div className={styles.uploadActions}>
-          <label className={styles.fileLabel}>
-            파일 선택
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={ACCEPTED_FILE_EXTENSIONS.join(",")}
-              className={styles.fileInput}
-              onChange={handleFileChange}
-              disabled={isUploading}
-            />
-          </label>
-          <button
-            type="button"
-            className={styles.uploadButton}
-            onClick={() => void handleUpload()}
-            disabled={!selectedFile || isUploading}
-          >
-            업로드
-          </button>
-        </div>
+        <label className={styles.fileLabel}>
+          파일 선택
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ACCEPTED_FILE_EXTENSIONS.join(",")}
+            className={styles.fileInput}
+            onChange={handleFileChange}
+            disabled={isUploading}
+          />
+        </label>
+        <button
+          type="button"
+          className={styles.uploadButton}
+          onClick={() => void handleUpload()}
+          disabled={!selectedFile || isUploading}
+        >
+          업로드
+        </button>
         {uploadError !== null && (
           <p role="alert" className={styles.error}>
             {uploadError}
@@ -212,8 +222,10 @@ export function DocumentManager() {
 
       {hasNonTerminal && (
         <p role="status" className={styles.pollingIndicator}>
-          <span aria-hidden="true">⟳</span> 처리 중인 문서가 있어 3초마다 상태를 확인하고
-          있습니다.
+          <svg width="13" height="13" viewBox="0 0 12 12" aria-hidden="true" className={styles.pollingIcon}>
+            <circle cx="6" cy="6" r="4.6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeDasharray="10 20" />
+          </svg>
+          처리 중인 문서가 있어 3초마다 상태를 확인하고 있습니다.
         </p>
       )}
 
@@ -290,6 +302,10 @@ function ErrorState({ detail, onRetry }: { detail: string; onRetry: () => void }
 function EmptyState() {
   return (
     <div className={styles.emptyState}>
+      <svg width="30" height="30" viewBox="0 0 14 14" aria-hidden="true" className={styles.emptyIcon}>
+        <path d="M3 1.6 h5 l3 3 v7.8 h-8 Z" fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round" />
+        <path d="M8 1.6 V4.6 H11" fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round" />
+      </svg>
       <h2>업로드된 문서가 없습니다</h2>
       <p>
         문서를 업로드하면 자동으로 파싱·임베딩되어 채팅 답변의 근거로 사용됩니다. PDF, DOCX,
@@ -317,69 +333,86 @@ function DocumentTable({
   onDeleteClick: (id: string, filename: string) => void;
 }) {
   return (
-    <table className={styles.table}>
-      <colgroup>
-        <col className={styles.colFilename} />
-        <col className={styles.colFormat} />
-        <col className={styles.colSize} />
-        <col className={styles.colStatus} />
-        <col className={styles.colChunks} />
-        <col className={styles.colUploaded} />
-        <col className={styles.colIndexed} />
-        <col className={styles.colActions} />
-      </colgroup>
-      <thead>
-        <tr>
-          <th scope="col">파일명</th>
-          <th scope="col">형식</th>
-          <th scope="col" className={styles.alignRight}>
-            크기
-          </th>
-          <th scope="col">상태</th>
-          <th scope="col" className={styles.alignRight}>
-            청크
-          </th>
-          <th scope="col">업로드</th>
-          <th scope="col">색인 완료</th>
-          <th scope="col">
-            <span className={styles.srOnly}>삭제</span>
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {documents.map((doc) => (
-          <tr key={doc.id}>
-            <td>
-              <TruncatedCell text={doc.filename} />
-              {doc.status === "FAILED" && doc.errorMessage !== null && (
-                <div className={styles.rowError}>
-                  <span aria-hidden="true">⚠</span>
-                  <ErrorMessageCell text={doc.errorMessage} />
-                </div>
-              )}
-            </td>
-            <td className={styles.formatCell}>{formatFileFormat(doc.filename, doc.mimeType)}</td>
-            <td className={styles.alignRight}>{formatSize(doc.sizeBytes)}</td>
-            <td>
-              <StatusBadge status={doc.status} />
-            </td>
-            <td className={styles.alignRight}>{doc.chunkCount ?? "—"}</td>
-            <td>{formatDateTime(doc.createdAt)}</td>
-            <td>{doc.indexedAt !== null ? formatDateTime(doc.indexedAt) : "—"}</td>
-            <td className={styles.alignRight}>
-              <button
-                type="button"
-                className={styles.deleteButton}
-                onClick={() => onDeleteClick(doc.id, doc.filename)}
-                aria-label={`${doc.filename} 삭제`}
-              >
-                <span aria-hidden="true">🗑</span> 삭제
-              </button>
-            </td>
+    // Prototype P:107 -- framed, rounded, horizontally scrollable container around the table.
+    <div className={styles.tableWrap}>
+      <table className={styles.table}>
+        <colgroup>
+          <col className={styles.colFilename} />
+          <col className={styles.colFormat} />
+          <col className={styles.colSize} />
+          <col className={styles.colStatus} />
+          <col className={styles.colChunks} />
+          <col className={styles.colUploaded} />
+          <col className={styles.colIndexed} />
+          <col className={styles.colActions} />
+        </colgroup>
+        <thead>
+          <tr>
+            <th scope="col">파일명</th>
+            <th scope="col">형식</th>
+            <th scope="col" className={styles.alignRight}>
+              크기
+            </th>
+            <th scope="col">상태</th>
+            <th scope="col" className={styles.alignRight}>
+              청크
+            </th>
+            <th scope="col">업로드</th>
+            <th scope="col">색인 완료</th>
+            <th scope="col">
+              <span className={styles.srOnly}>삭제</span>
+            </th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {documents.map((doc) => (
+            <tr key={doc.id}>
+              <td>
+                <TruncatedCell text={doc.filename} />
+                {doc.status === "FAILED" && doc.errorMessage !== null && (
+                  <div className={styles.rowError}>
+                    <svg width="13" height="13" viewBox="0 0 12 12" aria-hidden="true" className={styles.rowErrorIcon}>
+                      <circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+                      <path d="M6 3.3 V6.7" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                      <circle cx="6" cy="8.7" r="0.7" fill="currentColor" />
+                    </svg>
+                    <ErrorMessageCell text={doc.errorMessage} />
+                  </div>
+                )}
+              </td>
+              <td className={styles.formatCell}>{formatFileFormat(doc.filename, doc.mimeType)}</td>
+              <td className={styles.alignRight}>{formatSize(doc.sizeBytes)}</td>
+              <td>
+                <StatusBadge status={doc.status} />
+              </td>
+              <td className={styles.alignRight}>{doc.chunkCount ?? "—"}</td>
+              <td className={styles.dateCell}>{formatDateTime(doc.createdAt)}</td>
+              <td className={styles.dateCell}>{doc.indexedAt !== null ? formatDateTime(doc.indexedAt) : "—"}</td>
+              <td className={styles.alignRight}>
+                <button
+                  type="button"
+                  className={styles.deleteButton}
+                  onClick={() => onDeleteClick(doc.id, doc.filename)}
+                  aria-label={`${doc.filename} 삭제`}
+                >
+                  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" className={styles.deleteIcon}>
+                    <path
+                      d="M2 3.4 H10 M4.6 3.4 V2 h2.8 v1.4 M3.2 3.4 L3.8 10.4 h4.4 L8.8 3.4"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  삭제
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

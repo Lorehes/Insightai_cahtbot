@@ -1,48 +1,106 @@
 /* Card F2 chat input/panel. Rewired onto the --app-* token layer (design-system D4) --
-   no hardcoded colors/spacing. */
+   no hardcoded colors/spacing. Composer shape ported from `insight-chat 프로토타입.html`'s
+   Composer block (P:399-423): one bordered, shadowed card holding the textarea and a bottom row
+   (state hint on the left, 전송/생성 중단 on the right), with the fixed disclaimer centered
+   underneath. Prototype px values with no exact token are expressed as `calc()` on the nearest
+   token or as `rem` (fixed control dimensions), never as a new literal. */
 
+/* Fills `ChatWorkspace`'s `.main` column: the transcript (`MessageList`) is the flexible,
+   scrolling part; `.composer` is pinned below it. */
 .panel {
   display: flex;
   flex-direction: column;
-  gap: var(--app-gap-md);
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  max-width: 48rem;
 }
 
+/* P:400 -- `padding:16px 32px 24px`. */
+.composer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: none;
+  padding: var(--app-gap) var(--app-pad-screen) var(--app-gap-lg);
+  background: var(--app-bg);
+}
+
+/* P:401 -- same answer column the transcript uses. */
+.composerInner {
+  width: 100%;
+  max-width: var(--app-answer-max);
+}
+
+/* P:402 -- the card. Focus is shown on the card (`:focus-within`), not on the borderless
+   textarea inside it, so the ring follows the visible control boundary. */
 .form {
   display: flex;
-  gap: var(--app-gap-sm);
-  align-items: flex-end;
+  flex-direction: column;
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow);
+  overflow: hidden;
 }
 
+.form:focus-within {
+  border-color: var(--app-text);
+}
+
+/* P:403 -- `padding:16px 18px 8px;min-height:56px` (18 = --app-gap + 2, 56px = 3.5rem). */
 .textarea {
-  flex: 1;
-  padding: var(--app-gap-sm);
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-xs);
-  background: var(--app-surface);
+  display: block;
+  width: 100%;
+  min-height: 3.5rem;
+  padding: var(--app-gap) calc(var(--app-gap) + 2px) var(--app-gap-sm);
+  border: 0;
+  outline: none;
+  resize: none;
+  background: none;
   color: var(--app-text);
   font: inherit;
-  resize: vertical;
+  font-size: var(--app-type-body-size);
+  line-height: 1.65;
 }
 
-.textarea:focus-visible {
-  outline: 2px solid var(--app-text);
-  outline-offset: 2px;
+.textarea::placeholder {
+  color: var(--app-text-faint);
 }
 
 .textarea:disabled {
   opacity: 0.6;
 }
 
+/* P:404 -- `padding:8px 12px 12px 18px`. */
+.composerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-gap);
+  padding: var(--app-gap-sm) var(--app-gap-md) var(--app-gap-md) calc(var(--app-gap) + 2px);
+}
+
+/* P:413 -- 40px (`2.5rem`) accent button, `padding:0 20px` (= --app-gap + --app-gap-xs),
+   15px/600. */
 .button {
-  padding: var(--app-gap-sm) var(--app-gap-md);
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-xs);
-  background: var(--app-surface);
-  color: var(--app-text);
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-sm);
+  flex: none;
+  height: 2.5rem;
+  padding: 0 calc(var(--app-gap) + var(--app-gap-xs));
+  border: 0;
+  border-radius: var(--app-radius-sm);
+  background: var(--app-accent);
+  color: var(--app-text-inverse);
   cursor: pointer;
   font: inherit;
+  font-size: var(--app-type-body-size);
+  font-weight: 600;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--app-accent-press);
 }
 
 .button:focus-visible {
@@ -55,9 +113,65 @@
   opacity: 0.5;
 }
 
+.buttonIcon {
+  flex: none;
+}
+
+/* Card T9 (chat-prototype-port:AC-17) -- the composer's other mutually-exclusive submit-area
+   state (P:407-410): sunken, outlined, with a square "stop" glyph, so mid-stream the control
+   visibly reads as "stop", not just "send" relabeled. `padding:0 18px` = --app-gap + 2. */
+.stopButton {
+  display: flex;
+  align-items: center;
+  gap: var(--app-gap-sm);
+  flex: none;
+  height: 2.5rem;
+  padding: 0 calc(var(--app-gap) + 2px);
+  border: 1px solid var(--app-line-strong);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-bg-sunken);
+  color: var(--app-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--app-type-body-size);
+  font-weight: 600;
+}
+
+.stopButton:focus-visible {
+  outline: 2px solid var(--app-text);
+  outline-offset: 2px;
+}
+
+/* P:408 -- 10px (`0.625rem`) square glyph. */
+.stopIcon {
+  flex: none;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: var(--app-radius-xs);
+  background: var(--app-text-muted);
+}
+
 .error {
+  padding: var(--app-gap-xl) var(--app-pad-screen);
   color: var(--app-status-danger);
-  font-weight: bold;
+  font-weight: 600;
+}
+
+/* Card T8 (chat-prototype-port:AC-22/AC-23). P:405 -- the state hint sits inside the card's
+   bottom row (12px faint); P:422 -- the disclaimer is centered under the card (12px faint,
+   `margin:10px 0 0` = --app-gap-sm + 2). */
+.composerHint {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--app-type-label-size);
+  color: var(--app-text-faint);
+}
+
+.composerNotice {
+  margin: calc(var(--app-gap-sm) + 2px) 0 0;
+  text-align: center;
+  font-size: var(--app-type-label-size);
+  color: var(--app-text-faint);
 }
 
 /* Standard "sr-only" pattern -- keeps the <label> available to assistive tech without

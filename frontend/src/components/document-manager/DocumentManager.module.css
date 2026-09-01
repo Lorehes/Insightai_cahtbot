@@ -1,71 +1,97 @@
-/* document-ingestion T11: admin document manager screen. Tokens only, no hardcoded
-   colors/spacing -- the `.dialogOverlay::before` scrim below (see its own comment) and
-   `:has()` here both derive their effect from existing --app-* tokens rather than
-   introducing a new literal color (no scrim/overlay token exists in globals.css to
-   reference directly). */
+/* document-ingestion T11: admin document manager screen, ported from the prototype's
+   AdminDocuments blob (`8761c6b8`). Tokens only for color/radius/font-size
+   (design-system:AC-10/AC-11); px values are the prototype's own structural dimensions. Every
+   prototype 14px text value maps to --app-type-meta-size (13px), the same rounding the chat
+   screen uses. The `.dialogOverlay::before` scrim below (see its own comment) and `:has()` both
+   derive their effect from existing --app-* tokens rather than introducing a new literal color
+   (no scrim/overlay token exists in globals.css to reference directly). */
 
+/* P:26 -- `padding:32px 32px 32px;max-width:1240px`. */
 .page {
   display: flex;
   flex-direction: column;
   gap: var(--app-gap-lg);
-  max-width: var(--app-answer-max);
+  max-width: 1240px;
+  padding: var(--app-pad-screen) var(--app-pad-screen) var(--app-gap-xl);
 }
 
+/* P:29-33 -- title + one-line description. */
 .header {
   display: flex;
   flex-direction: column;
-  gap: var(--app-gap-xs);
+  gap: 6px;
 }
 
 .header h1 {
+  margin: 0;
   font-size: var(--app-type-page-size);
   font-weight: var(--app-type-page-weight);
+  letter-spacing: -0.6px;
 }
 
 .description {
+  margin: 0;
   color: var(--app-text-muted);
-  font-size: var(--app-type-meta-size);
+  font-size: var(--app-type-body-size);
+  line-height: 1.6;
+  text-wrap: pretty;
 }
 
+/* P:42 -- one row: upload glyph | title + hint | 파일 선택 | 업로드; `padding:18px 20px`. The
+   error line (`.error`, rendered last) wraps onto its own full-width row. */
 .uploadForm {
   display: flex;
-  flex-direction: column;
-  gap: var(--app-gap-sm);
-  padding: var(--app-gap-lg);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--app-gap);
+  padding: 18px 20px;
   border: 1px solid var(--app-line);
   border-radius: var(--app-radius-md);
   background: var(--app-surface);
 }
 
+.uploadIcon {
+  display: block;
+  flex: none;
+  color: var(--app-text-muted);
+}
+
+.uploadText {
+  flex: 1;
+  min-width: 0;
+}
+
 .uploadHeading {
-  display: flex;
-  align-items: center;
-  gap: var(--app-gap-xs);
   font-size: var(--app-type-card-size);
   font-weight: var(--app-type-card-weight);
 }
 
 .uploadHint {
+  margin: 3px 0 0;
   color: var(--app-text-muted);
   font-size: var(--app-type-meta-size);
 }
 
-.uploadActions {
-  display: flex;
-  align-items: center;
-  gap: var(--app-gap-sm);
-}
-
+/* P:51 -- 42px outlined-in-ink label button. */
 .fileLabel {
   position: relative;
-  display: inline-block;
-  padding: var(--app-gap-sm) var(--app-gap-md);
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-xs);
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 42px;
+  padding: 0 var(--app-gap);
+  border: 1px solid var(--app-text);
+  border-radius: var(--app-radius-sm);
   background: var(--app-surface);
   color: var(--app-text);
   cursor: pointer;
   font: inherit;
+  font-size: var(--app-type-meta-size);
+  font-weight: 600;
+}
+
+.fileLabel:hover {
+  background: var(--app-bg-sunken);
 }
 
 .fileLabel:has(.fileInput:focus-visible) {
@@ -82,15 +108,24 @@
   cursor: pointer;
 }
 
+/* P:55 -- 42px accent button; disabled goes flat --app-line-strong (not faded), as in the
+   prototype's `uploadBg`. */
 .uploadButton {
-  padding: var(--app-gap-sm) var(--app-gap-md);
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-xs);
+  flex: none;
+  height: 42px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: var(--app-radius-sm);
   background: var(--app-accent);
   color: var(--app-text-inverse);
   cursor: pointer;
   font: inherit;
-  font-weight: bold;
+  font-size: var(--app-type-meta-size);
+  font-weight: 600;
+}
+
+.uploadButton:hover:not(:disabled) {
+  background: var(--app-accent-press);
 }
 
 .uploadButton:focus-visible {
@@ -99,79 +134,124 @@
 }
 
 .uploadButton:disabled {
+  background: var(--app-line-strong);
   cursor: not-allowed;
-  opacity: 0.5;
 }
 
 .error {
+  flex-basis: 100%;
+  margin: 0;
   color: var(--app-status-danger);
-  font-weight: bold;
+  font-size: var(--app-type-meta-size);
+  font-weight: 600;
 }
 
+/* P:60 -- spinner + one line, pulled up against the table (`margin-bottom:12px` in the
+   prototype; here the page gap already separates it, so it is nudged up instead). */
 .pollingIndicator {
   display: flex;
   align-items: center;
-  gap: var(--app-gap-xs);
+  gap: var(--app-gap-sm);
+  margin: calc(-1 * var(--app-gap-md)) 0;
   color: var(--app-text-muted);
   font-size: var(--app-type-meta-size);
 }
 
-.loadingState .table {
-  opacity: 0.6;
+.pollingIcon {
+  display: block;
+  flex: none;
+  animation: ad-spin 0.9s linear infinite;
+}
+
+/* P:70-74 -- 5 shimmering 56px bands inside one framed box. The skeleton table's cells are
+   collapsed to zero padding so the 8 per-row bars fuse into a single band. */
+.loadingState {
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-md);
+  overflow: hidden;
+}
+
+.loadingState .table td {
+  padding: 0;
+  border-bottom: 1px solid var(--app-line-soft);
+}
+
+.loadingState .table tr:last-child td {
+  border-bottom: 0;
 }
 
 .skeletonBar {
-  height: var(--app-gap-md);
-  border-radius: var(--app-radius-xs);
+  height: 56px;
   background: linear-gradient(
     90deg,
     var(--app-surface-strong),
     var(--app-surface-hover),
     var(--app-surface-strong)
   );
-  background-size: 200% 100%;
-  animation: shimmer 1.4s ease-in-out infinite;
+  background-size: 420px 100%;
+  animation: ad-shimmer 1.3s linear infinite;
 }
 
-@keyframes shimmer {
+@keyframes ad-shimmer {
   0% {
-    background-position: 200% 0;
+    background-position: -420px 0;
   }
   100% {
-    background-position: -200% 0;
+    background-position: 420px 0;
   }
 }
 
-.errorState,
-.emptyState {
+@keyframes ad-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* P:79-90 -- danger wash + 1.5px inset ring, title 16/600, retry outlined in danger. */
+.errorState {
   display: flex;
   flex-direction: column;
-  gap: var(--app-gap-xs);
-  padding: var(--app-gap-lg);
-  border: 1px solid var(--app-line);
+  align-items: flex-start;
+  gap: 6px;
+  padding: 22px;
   border-radius: var(--app-radius-md);
-  background: var(--app-surface);
+  background: var(--app-status-danger-wash);
+  box-shadow: inset 0 0 0 1.5px var(--app-status-danger);
 }
 
-.errorState h2,
-.emptyState h2 {
-  font-size: var(--app-type-section-size);
-  font-weight: var(--app-type-section-weight);
+.errorState h2 {
+  margin: 0;
+  font-size: var(--app-type-card-size);
+  font-weight: 600;
+  color: var(--app-status-danger);
 }
 
-.emptyState p {
-  color: var(--app-text-muted);
+.errorState p {
+  margin: 0;
+  font-size: var(--app-type-meta-size);
+  line-height: 1.6;
+  color: var(--app-status-danger);
+  text-wrap: pretty;
 }
 
 .retryButton {
   align-self: flex-start;
-  padding: var(--app-gap-sm) var(--app-gap-md);
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-xs);
-  background: var(--app-surface);
-  color: var(--app-text);
+  margin-top: var(--app-gap-sm);
+  height: 38px;
+  padding: 0 var(--app-gap);
+  border: 1.5px solid var(--app-status-danger);
+  border-radius: var(--app-radius-sm);
+  background: none;
+  color: var(--app-status-danger);
   cursor: pointer;
   font: inherit;
+  font-size: var(--app-type-meta-size);
+  font-weight: 600;
+}
+
+.retryButton:hover {
+  background: var(--app-status-danger);
+  color: var(--app-text-inverse);
 }
 
 .retryButton:focus-visible {
@@ -179,25 +259,99 @@
   outline-offset: 2px;
 }
 
-.table {
-  width: 100%;
-  table-layout: fixed;
-  border-collapse: collapse;
+/* P:95-102 -- centered, dashed, sunken. */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 72px 24px;
+  border: 1px dashed var(--app-line-strong);
+  border-radius: var(--app-radius-md);
+  background: var(--app-bg-sunken);
+  text-align: center;
 }
 
-.table th,
+.emptyIcon {
+  display: block;
+  color: var(--app-text-faint);
+}
+
+.emptyState h2 {
+  margin: 0;
+  font-size: var(--app-type-card-size);
+  font-weight: 600;
+}
+
+.emptyState p {
+  margin: 0;
+  max-width: 420px;
+  color: var(--app-text-muted);
+  font-size: var(--app-type-meta-size);
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+/* P:107 -- framed, rounded, horizontally scrollable table container. */
+.tableWrap {
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-md);
+  overflow-x: auto;
+  background: var(--app-surface);
+}
+
+/* P:108 -- `min-width:820px`. `table-layout: fixed` + the `<colgroup>` widths keep the
+   filename column truncating (TruncatedCell) instead of stretching the row. */
+.table {
+  width: 100%;
+  min-width: 820px;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: var(--app-type-meta-size);
+}
+
+/* P:111-118 -- 12px/700 muted headers on a sunken band. */
+.table th {
+  padding: 12px 14px;
+  background: var(--app-bg-sunken);
+  border-bottom: 1px solid var(--app-line);
+  text-align: left;
+  color: var(--app-text-muted);
+  font-size: var(--app-type-label-size);
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+
+/* P:123-145 -- `padding:13px 14px`, hairline-soft row separators, sunken hover. */
 .table td {
-  padding: var(--app-gap-sm);
+  padding: 13px 14px;
   border-bottom: 1px solid var(--app-line-soft);
   text-align: left;
-  font-size: var(--app-type-body-size);
+  color: var(--app-text-body);
   vertical-align: top;
 }
 
-.table th {
-  color: var(--app-text-muted);
-  font-size: var(--app-type-label-size);
-  font-weight: var(--app-type-label-weight);
+.table th:first-child,
+.table td:first-child,
+.table th:last-child,
+.table td:last-child {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table tbody tr:hover {
+  background: var(--app-bg-sunken);
+}
+
+/* P:125 -- filename in ink, 500. */
+.table td:first-child {
+  color: var(--app-text);
+  font-weight: 500;
 }
 
 .alignRight {
@@ -214,53 +368,75 @@
   width: 10%;
 }
 .colStatus {
-  width: 12%;
+  width: 13%;
 }
 .colChunks {
-  width: 8%;
+  width: 7%;
 }
 .colUploaded {
-  width: 15%;
+  width: 14%;
 }
 .colIndexed {
-  width: 15%;
+  width: 14%;
 }
 .colActions {
-  width: 6%;
+  width: 8%;
 }
 
-.formatCell {
+/* P:137 -- mono, muted. */
+.table td.formatCell {
   color: var(--app-text-muted);
   font-family: var(--app-type-mono);
   font-size: var(--app-type-code-size);
+  font-weight: 400;
 }
 
+/* P:143-144 -- timestamps muted. */
+.dateCell {
+  color: var(--app-text-muted);
+  white-space: nowrap;
+}
+
+/* P:127-134 -- danger note under a FAILED filename. */
 .rowError {
   display: flex;
   align-items: flex-start;
-  gap: var(--app-gap-xs);
-  margin-top: var(--app-gap-xs);
+  gap: 6px;
+  margin-top: 6px;
+  max-width: 420px;
   font-size: var(--app-type-meta-size);
+  font-weight: 400;
+  line-height: 1.5;
 }
 
+.rowErrorIcon {
+  display: block;
+  flex: none;
+  margin-top: 2px;
+  color: var(--app-status-danger);
+}
+
+/* P:146 -- 32px outlined button that turns danger on hover/focus. */
 .deleteButton {
   display: inline-flex;
   align-items: center;
-  gap: var(--app-gap-xs);
-  border: none;
-  /* `background: none`, not a see-through-color keyword literal (design-system:AC-10 bans
-     it) -- the shorthand resets background-color to its own initial value, which already
-     shows nothing underneath, without writing that banned word. */
-  background: none;
-  color: var(--app-text-body);
+  gap: 6px;
+  height: 32px;
+  padding: 0 var(--app-gap-md);
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-surface);
+  color: var(--app-text-muted);
   cursor: pointer;
   font: inherit;
   font-size: var(--app-type-meta-size);
-  padding: var(--app-gap-xs) var(--app-gap-sm);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .deleteButton:hover,
 .deleteButton:focus-visible {
+  border-color: var(--app-status-danger);
   color: var(--app-status-danger);
 }
 
@@ -269,8 +445,14 @@
   outline-offset: 2px;
 }
 
+.deleteIcon {
+  display: block;
+  flex: none;
+}
+
+/* P:158 -- left-aligned meta line under the table, pulled up against it. */
 .footerCount {
-  text-align: right;
+  margin: calc(-1 * var(--app-gap-md)) 0 0;
   color: var(--app-text-faint);
   font-size: var(--app-type-meta-size);
 }
@@ -310,21 +492,32 @@
   opacity: 0.45;
 }
 
+/* P:164-170 -- 420px card, `padding:26px 26px 22px`, 42px buttons. */
 .dialog {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--app-gap-md);
-  max-width: 28rem;
-  padding: var(--app-gap-lg);
+  width: 420px;
+  max-width: calc(100vw - 48px);
+  padding: 26px 26px 22px;
   border-radius: var(--app-radius-md);
   background: var(--app-surface);
   box-shadow: var(--app-shadow);
 }
 
 .dialog h2 {
+  margin: 0 0 10px;
   font-size: var(--app-type-section-size);
-  font-weight: var(--app-type-section-weight);
+  font-weight: 600;
+  letter-spacing: -0.2px;
+}
+
+.dialog p {
+  margin: 0 0 22px;
+  font-size: var(--app-type-meta-size);
+  line-height: 1.65;
+  color: var(--app-text-muted);
+  text-wrap: pretty;
 }
 
 .dialogActions {
@@ -334,24 +527,33 @@
 }
 
 .cancelButton {
-  padding: var(--app-gap-sm) var(--app-gap-md);
+  height: 42px;
+  padding: 0 18px;
   border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-xs);
+  border-radius: var(--app-radius-sm);
   background: var(--app-surface);
   color: var(--app-text);
   cursor: pointer;
   font: inherit;
+  font-size: var(--app-type-body-size);
+  font-weight: 600;
+}
+
+.cancelButton:hover:not(:disabled) {
+  border-color: var(--app-text);
 }
 
 .confirmDeleteButton {
-  padding: var(--app-gap-sm) var(--app-gap-md);
-  border: 1px solid var(--app-status-danger);
-  border-radius: var(--app-radius-xs);
-  background: var(--app-status-danger-wash);
-  color: var(--app-status-danger);
+  height: 42px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--app-radius-sm);
+  background: var(--app-status-danger);
+  color: var(--app-text-inverse);
   cursor: pointer;
   font: inherit;
-  font-weight: bold;
+  font-size: var(--app-type-body-size);
+  font-weight: 600;
 }
 
 .cancelButton:focus-visible,
@@ -364,4 +566,11 @@
 .confirmDeleteButton:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pollingIcon,
+  .skeletonBar {
+    animation: none;
+  }
 }

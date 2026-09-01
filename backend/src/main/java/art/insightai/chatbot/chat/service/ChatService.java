@@ -34,9 +34,11 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -610,7 +612,7 @@ public class ChatService {
      *   an empty list, same as the true "nothing to report" cases (hybrid-rag:AC-5/AC-10 clause②/
      *   AC-14 clause②) — that empty result is not itself distinguished from those cases, since
      *   {@code sources: []} already carries no signal about *why* it is empty on the wire.
-     * [AC] hybrid-rag:AC-5, hybrid-rag:AC-10, hybrid-rag:AC-11, hybrid-rag:AC-14
+     * [AC] hybrid-rag:AC-5, hybrid-rag:AC-10, hybrid-rag:AC-11, hybrid-rag:AC-12, hybrid-rag:AC-14
      */
     private List<ChatChunk.Source> resolveSources(ChatResponse response, boolean ragEnabled, String conversationId) {
         if (!ragEnabled) {
@@ -637,10 +639,23 @@ public class ChatService {
         // sourceRefMapper.toSourceRefs(chunks) (list-in/list-out) wrapped in one try/catch -- that
         // is exactly the regression this loop fixes (see this method's own [Caution]).
         List<ChatChunk.Source> sources = new ArrayList<>(documents.size());
+        // One citation per (documentId, page), not per chunk (2026-09-01, user decision "A + C"):
+        // top-k retrieval routinely returns several chunks of the same page of the same file, and
+        // each used to become its own, visually identical Source ("출처 5건" for one document).
+        // Retrieval order is rank order, so keeping the *first* occurrence keeps the best-ranked
+        // chunk's score/snippet for that citation. A null page is a real key of its own (non-PDF
+        // formats, ChunkMetadataBuilder) -- every chunk of such a document collapses into one
+        // citation, which is exactly what the user sees anyway since there is no page to tell them
+        // apart by. This is the only place the wire/persisted `sources` list is assembled (hybrid-
+        // rag:AC-11/AC-12), so the SSE payload and messages.sources stay identical.
+        Set<SourceCitationKey> seen = new HashSet<>();
         int mappingFailures = 0;
         for (Document document : documents) {
             try {
-                sources.add(toChunkSource(sourceRefMapper.toSourceRef(toRetrievedChunk(document))));
+                ChatChunk.Source source = toChunkSource(sourceRefMapper.toSourceRef(toRetrievedChunk(document)));
+                if (seen.add(new SourceCitationKey(source.documentId(), source.page()))) {
+                    sources.add(source);
+                }
             } catch (RuntimeException e) {
                 mappingFailures++;
                 log.debug("단일 청크의 sources 매핑 실패, 해당 원소만 제외합니다 (conversationId={})", conversationId, e);
@@ -651,6 +666,20 @@ public class ChatService {
                     + "(conversationId={})", mappingFailures, conversationId);
         }
         return List.copyOf(sources);
+    }
+
+    /**
+     * [Purpose] Identity of one citation for {@link #resolveSources}'s de-duplication: the backing
+     *   document plus the page within it ({@code null} page = "the whole file", for formats whose
+     *   parser yields no page boundary).
+     * [Rationale] A record so equality/hashing is by value; kept private to this class because the
+     *   rule "one citation per document page" is a presentation decision of the wire/persisted
+     *   {@code sources} list (hybrid-rag:AC-12), not a property of {@link SourceRef} (which stays
+     *   one-per-chunk for the rag package's own consumers, e.g. the eval judge). Declared directly
+     *   below its only consumer (batch review 2026-09-01 Medium-4 -- an earlier position between
+     *   {@code toRetrievedChunk}'s Javadoc and that method left that Javadoc orphaned).
+     */
+    private record SourceCitationKey(String documentId, Integer page) {
     }
 
     /**

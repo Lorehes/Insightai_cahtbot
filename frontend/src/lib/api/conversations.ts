@@ -81,3 +81,38 @@ export function listConversations(): Promise<ConversationSummaryResponse[]> {
 export function deleteConversation(id: string): Promise<void> {
   return apiFetchVoid(`/api/conversations/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
+
+/**
+ * [Purpose] Response body for `PATCH /api/conversations/{id}` (chat Spec §5 A-11, confirmed
+ *   against `ConversationController.ConversationRagEnabledResponse`).
+ * [Caution] Deliberately narrower than {@link ConversationResponse} -- this endpoint updates
+ *   only `ragEnabled` and echoes back just `{id, ragEnabled}`, not the full conversation
+ *   resource (`ConversationController#updateRagEnabled` [Rationale]: returning the whole
+ *   resource would imply a broader "update conversation" contract this endpoint does not
+ *   implement).
+ */
+export interface ConversationRagEnabledResponse {
+  id: string;
+  ragEnabled: boolean;
+}
+
+/**
+ * [Purpose] Calls `PATCH /api/conversations/{id}` with body `{ragEnabled}` to flip the
+ *   conversation-scoped RAG toggle, for the toggle UI (chat-prototype-port Spec T5).
+ * [Rationale] This function (card T1) owns only the path/method/body/credentials contract --
+ *   whichever `ragEnabled` value the caller passes in is sent through unchanged. Deciding
+ *   *that* value is the negation of the toggle's current state, and reflecting the response
+ *   in `aria-checked`, is card T5's scope (chat-prototype-port Spec T1 card notes), not this
+ *   function's. Routed through {@link apiFetch}, not {@link apiFetchVoid}, because this
+ *   endpoint returns `200` with a body (unlike {@link deleteConversation}'s `204`).
+ * [AC] chat-prototype-port:AC-10 (path/method/body/credentials only -- see card T1 notes)
+ */
+export function updateRagEnabled(id: string, ragEnabled: boolean): Promise<ConversationRagEnabledResponse> {
+  return apiFetch<ConversationRagEnabledResponse>(`/api/conversations/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ ragEnabled }),
+  });
+}

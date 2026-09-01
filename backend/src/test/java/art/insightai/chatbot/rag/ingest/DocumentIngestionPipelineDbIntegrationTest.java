@@ -7,6 +7,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -27,6 +28,10 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import javax.sql.DataSource;
 
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
+import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -51,7 +56,10 @@ import art.insightai.chatbot.support.SampleDocumentFixtures;
  *   that order, {@code indexed_at} non-null), document-ingestion:AC-6 (parse/index failure =&gt;
  *   FAILED + non-blank {@code error_message} + zero chunks, cleanup ordered before the FAILED
  *   record) and document-ingestion:AC-7 ({@code chunk_count} equals the row count under
- *   {@code metadata->>'document_id'} and is at least 1).
+ *   {@code metadata->>'document_id'} and is at least 1). One later case closes
+ *   document-ingestion:AC-20's trailing clause instead -- a user-password PDF keeps the
+ *   pre-existing PARSE_FAILURE shape, no new failure form -- see
+ *   {@link #failsThroughExistingParseFailurePathForUserPasswordProtectedPdf()}.
  * [Rationale] The Spec's AC-5 cell explicitly forbids closing these rows on the strength of T8's
  *   mock-based unit suite ({@link DocumentIngestionPipelineStateMachineTest}): a mocked
  *   {@code DocumentStatusTransitioner} can prove call order but not that anything was
@@ -462,6 +470,53 @@ class DocumentIngestionPipelineDbIntegrationTest extends IntegrationTestBase {
                 .isNotBlank()
                 .isEqualTo(DocumentIngestionPipeline.EMPTY_INDEX_FAILURE_MESSAGE);
         assertThat(chunkRepository.countByDocumentId(documentId)).isZero();
+    }
+
+    @Test
+    @DisplayName("[document-ingestion:AC-20] 사용자 암호로 잠긴 PDF 는 새 실패 형태 없이 기존 PARSE_FAILURE 경로로 FAILED 된다")
+    void failsThroughExistingParseFailurePathForUserPasswordProtectedPdf() {
+        // given: a PDF locked with a real user password -- PDFBox cannot open it with the empty
+        // password, neither at the upload guard nor here. DocumentUploadServiceTest's AC-20 case
+        // already proves the upload guard lets this file through unchanged; this case closes
+        // AC-20's trailing clause ("기존 PARSE_FAILURE 경로 유지") with the REAL parser against
+        // the real DB: the failure surfaces as the pre-existing parse-stage FAILED shape (fixed
+        // PARSE_FAILURE message, zero chunks), not as any new status, message, or client string.
+        UUID documentId = createPendingDocumentWithFile(
+                "locked.pdf", "application/pdf", userPasswordProtectedPdfBytes());
+
+        // when
+        pipeline.ingest(documentId);
+
+        // then: identical terminal shape to recordsFailedWithFixedMessageWhenParsingFails above
+        Map<String, Object> row = jdbcTemplate.queryForMap(
+                "SELECT status, error_message, chunk_count, indexed_at FROM documents WHERE id = ?",
+                documentId);
+        assertThat(row.get("status")).isEqualTo("FAILED");
+        assertThat((String) row.get("error_message"))
+                .isNotBlank()
+                .isEqualTo(DocumentIngestionPipeline.PARSE_FAILURE_MESSAGE);
+        assertThat(row.get("chunk_count")).isNull();
+        assertThat(row.get("indexed_at")).isNull();
+        assertThat(chunkRepository.countByDocumentId(documentId)).isZero();
+        verify(chunkIndexer, never()).index(anyList());
+    }
+
+    /**
+     * [Purpose] One-page PDF locked with a real user password ("user-secret"), built in-memory --
+     *   the shape {@code Loader.loadPDF} with the empty password rejects with
+     *   {@code InvalidPasswordException}. Mirrors {@code DocumentUploadServiceTest#pdfBytes}.
+     */
+    private static byte[] userPasswordProtectedPdfBytes() {
+        try (PDDocument doc = new PDDocument()) {
+            doc.addPage(new PDPage());
+            doc.protect(new StandardProtectionPolicy(
+                    "owner-secret", "user-secret", new AccessPermission()));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to build the locked PDF fixture", e);
+        }
     }
 
     /**

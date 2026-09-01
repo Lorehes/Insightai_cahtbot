@@ -220,6 +220,12 @@ export interface MessageResponse {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  /** The citations persisted with an assistant turn (`messages.sources`, hybrid-rag AC-12's
+   *  read side) -- the same `ChatChunk.Source` shape the SSE terminal chunk carried when the
+   *  turn was streamed (`ConversationController.MessageResponse`). `null` for a user row, and
+   *  for an assistant row that never had citations recorded. Optional in the type only so older
+   *  fixtures/callers that omit it stay valid; the backend always sends the key. */
+  sources?: ChatSource[] | null;
 }
 
 /**

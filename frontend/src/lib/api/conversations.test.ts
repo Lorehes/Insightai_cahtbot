@@ -1,5 +1,5 @@
 import { ApiError } from "./client";
-import { deleteConversation, listConversations } from "./conversations";
+import { deleteConversation, listConversations, updateRagEnabled } from "./conversations";
 
 /** Same duck-typed Response stand-in `client.test.ts` uses, for the same portability reason
  *  (jest-environment-jsdom does not reliably expose a global `Response` constructor). */
@@ -101,5 +101,63 @@ describe("deleteConversation", () => {
     mockFetchOnce({ ok: false, status: 404, statusText: "Not Found", text: async () => "not found" });
 
     await expect(deleteConversation("missing")).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe("updateRagEnabled", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  // T1 owns only path/method/body/credentials -- not the toggle's flip logic or
+  // aria-checked (card T5's scope, chat-prototype-port Spec T1 card notes).
+  it("[chat-prototype-port:AC-10] PATCHes /api/conversations/{id} with the given ragEnabled value in the body", async () => {
+    const fetchMock = mockFetchOnce({ json: async () => ({ id: "conv-1", ragEnabled: true }) });
+
+    await updateRagEnabled("conv-1", true);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/conversations/conv-1",
+      expect.objectContaining({
+        method: "PATCH",
+        credentials: "same-origin",
+        body: JSON.stringify({ ragEnabled: true }),
+      }),
+    );
+  });
+
+  // Same test target as above with the opposite value, to prove the passed-in value is
+  // sent through as-is rather than a hardcoded/always-true body (Spec §6 test pitfall 3).
+  it("[chat-prototype-port:AC-10] sends ragEnabled: false through unchanged when the caller passes false", async () => {
+    const fetchMock = mockFetchOnce({ json: async () => ({ id: "conv-1", ragEnabled: false }) });
+
+    await updateRagEnabled("conv-1", false);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/conversations/conv-1",
+      expect.objectContaining({ body: JSON.stringify({ ragEnabled: false }) }),
+    );
+  });
+
+  it("URL-encodes the conversation id", async () => {
+    const fetchMock = mockFetchOnce({ json: async () => ({ id: "conv/needs encoding", ragEnabled: true }) });
+
+    await updateRagEnabled("conv/needs encoding", true);
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/conversations/conv%2Fneeds%20encoding", expect.anything());
+  });
+
+  it("resolves with the parsed {id, ragEnabled} response", async () => {
+    mockFetchOnce({ json: async () => ({ id: "conv-1", ragEnabled: true }) });
+
+    await expect(updateRagEnabled("conv-1", true)).resolves.toEqual({ id: "conv-1", ragEnabled: true });
+  });
+
+  it("throws ApiError on a non-2xx response", async () => {
+    mockFetchOnce({ ok: false, status: 404, statusText: "Not Found", text: async () => "not found" });
+
+    await expect(updateRagEnabled("missing", true)).rejects.toBeInstanceOf(ApiError);
   });
 });

@@ -79,6 +79,14 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-tika-document-reader</artifactId>
         </dependency>
+        <!-- PDF 페이지 단위 파싱 : Tika 리더는 페이지 경계를 전혀 노출하지 않아(DocumentParser Javadoc)
+             출처의 page 가 항상 null 이었다. PDF 만 PagePdfDocumentReader(PDFBox) 로 페이지별로
+             읽어 chunk metadata.page 를 채운다. PDFBox 자체는 Tika 가 이미 끌고 오므로 새 네이티브
+             의존성은 없다. 버전은 spring-ai-bom 이 관리한다. -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-pdf-document-reader</artifactId>
+        </dependency>
         <!-- 하이브리드 RAG 파이프라인 : RetrievalAugmentationAdvisor / CompressionQueryTransformer /
              DocumentRetriever(+VectorStoreDocumentRetriever) 전부 이 아티팩트 하나에 포함됨을
              T1 스파이크가 로컬 jar 실측(jar tf + sources 직독)으로 확인했다 (hybrid-rag Spec T1).

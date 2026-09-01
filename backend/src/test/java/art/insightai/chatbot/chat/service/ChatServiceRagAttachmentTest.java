@@ -1,6 +1,7 @@
 package art.insightai.chatbot.chat.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -420,6 +421,71 @@ class ChatServiceRagAttachmentTest {
         String storedJson = assistantMessageCaptor.getValue().getSources();
         List<ChatChunk.Source> parsedFromDb =
                 objectMapper.readValue(storedJson, new TypeReference<List<ChatChunk.Source>>() {});
+        assertThat(parsedFromDb).isEqualTo(lastSources);
+    }
+
+    /**
+     * [Purpose] Pins the one-citation-per-(document, page) rule of {@code
+     *   ChatService#resolveSources} (2026-09-01, user decision "A + C"): top-k retrieval routinely
+     *   returns several chunks of the same page of the same file, and each used to become its own,
+     *   visually identical {@code Source} ("출처 5건" for a single one-document corpus).
+     * [Rationale] Five chunks -- three from page 3 of one PDF, one from page 7 of the same PDF, one
+     *   from a different document with no page at all -- must collapse to exactly three citations,
+     *   in retrieval order, each keeping the *first* (best-ranked) chunk's score/snippet. The
+     *   persisted JSON must carry the same de-duplicated list (hybrid-rag:AC-12), not the raw
+     *   per-chunk one.
+     * [AC] hybrid-rag:AC-11, hybrid-rag:AC-12
+     */
+    @Test
+    @DisplayName("[hybrid-rag:AC-11][hybrid-rag:AC-12] 같은 문서의 같은 페이지에서 나온 청크 여러 개는 출처 1건으로 합쳐지고, "
+            + "첫 번째(최상위) 청크의 score·snippet 이 유지되며, 저장된 JSON 도 합쳐진 목록과 같다")
+    void collapsesChunksOfTheSameDocumentPageIntoOneSource() {
+        // given: 5 retrieved chunks over 2 documents / 3 distinct (document, page) keys
+        HybridDocumentRetriever hybridDocumentRetriever = mock(HybridDocumentRetriever.class);
+        UUID pdfId = UUID.randomUUID();
+        UUID txtId = UUID.randomUUID();
+        RetrievedChunk pdfPage3First = new RetrievedChunk("c1", "3페이지 첫 청크",
+                Map.of("document_id", pdfId.toString(), "filename", "규정.pdf", "page", 3), 0.9);
+        RetrievedChunk pdfPage3Second = new RetrievedChunk("c2", "3페이지 둘째 청크",
+                Map.of("document_id", pdfId.toString(), "filename", "규정.pdf", "page", 3), 0.8);
+        RetrievedChunk txtNoPage = new RetrievedChunk("c3", "텍스트 문서 청크",
+                Map.of("document_id", txtId.toString(), "filename", "안내.txt"), 0.7);
+        RetrievedChunk pdfPage7 = new RetrievedChunk("c4", "7페이지 청크",
+                Map.of("document_id", pdfId.toString(), "filename", "규정.pdf", "page", 7), 0.6);
+        RetrievedChunk pdfPage3Third = new RetrievedChunk("c5", "3페이지 셋째 청크",
+                Map.of("document_id", pdfId.toString(), "filename", "규정.pdf", "page", 3), 0.5);
+        when(hybridDocumentRetriever.retrieve(anyString()))
+                .thenReturn(List.of(pdfPage3First, pdfPage3Second, txtNoPage, pdfPage7, pdfPage3Third));
+        StubChatModel stubChatModel = new StubChatModel();
+        stubChatModel.enqueueTokens(List.of("답변입니다"), "stop", new StubChatModel.Usage(10, 5, null));
+        RetrievalAugmentationAdvisor ragAdvisor = ragAdvisor(hybridDocumentRetriever, stubChatModel);
+        RagEmptyContextGuardAdvisor guardAdvisor = ragAdvisorConfig.ragEmptyContextGuardAdvisor();
+        String question = "질문입니다";
+        when(chatMemoryRepository.findByConversationId(CONVERSATION_ID.toString()))
+                .thenReturn(List.of(new UserMessage(question)));
+        ChatService service = new ChatService(ChatClient.builder(stubChatModel), conversationService,
+                chatMemoryRepository, TestAppPropertiesFactory.valid(), new RagAdvisorPair(ragAdvisor, guardAdvisor),
+                sourceRefMapper, objectMapper);
+        Conversation conversation = conversationStub(true);
+
+        // when
+        List<ChatChunk> chunks = service.streamReply(conversation, null, question).collectList().block();
+
+        // then: 3 citations, retrieval order, first-occurrence score/snippet kept
+        List<ChatChunk.Source> lastSources = chunks.get(chunks.size() - 1).sources();
+        assertThat(lastSources)
+                .extracting(ChatChunk.Source::documentId, ChatChunk.Source::page, ChatChunk.Source::score)
+                .containsExactly(
+                        tuple(pdfId.toString(), 3, 0.9),
+                        tuple(txtId.toString(), null, 0.7),
+                        tuple(pdfId.toString(), 7, 0.6));
+        assertThat(lastSources.get(0).snippet()).isEqualTo("3페이지 첫 청크");
+
+        // then: the persisted JSON is the same de-duplicated list, not the raw 5-element one
+        ArgumentCaptor<Message> assistantMessageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(conversationService).persistAssistantTurn(assistantMessageCaptor.capture());
+        List<ChatChunk.Source> parsedFromDb = objectMapper.readValue(
+                assistantMessageCaptor.getValue().getSources(), new TypeReference<List<ChatChunk.Source>>() {});
         assertThat(parsedFromDb).isEqualTo(lastSources);
     }
 

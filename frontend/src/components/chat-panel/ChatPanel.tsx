@@ -45,12 +45,76 @@ function nextMessageId(prefix: "user" | "assistant"): string {
  *   component -- this doubles as the cleanup for a mid-turn conversation switch, since a
  *   caller that changes conversations is expected to do so via a `key` change (a fresh
  *   mount), not a prop update on the same instance.
- * [AC] chat:AC-36, chat:AC-38, chat:AC-39
+ * [Caution] `ragEnabled` (card T6, retyped to `boolean | undefined` by card T14 finishing work
+ *   Medium-1) is a straight pass-through to {@link MessageList} -- this component neither reads
+ *   nor sends it (`streamAssistantReply`'s wire request has no per-message RAG field, Spec §8
+ *   D-1: the setting is conversation-scoped, changed only via `PATCH /api/conversations/{id}`
+ *   from {@link ../chat-workspace/ChatWorkspace}). No default value anymore -- this component
+ *   used to default a missing value to `true` (this project's backend default for a brand-new
+ *   conversation), but {@link ../chat-workspace/ChatWorkspace} can now legitimately pass
+ *   `undefined` for an *already-known* conversation too. A failed RAG-toggle PATCH no longer
+ *   deletes that conversation's `ragById` entry (card T16 replaced that "auto-recover" design
+ *   after it was Blocked in review five times); instead the id is added to a separate
+ *   `ragUnverified` set, and only while an id is in that set does {@link
+ *   ../chat-workspace/ChatWorkspace} gate this prop down to `undefined` (T16 2R High-1 --
+ *   an earlier T16 version left this prop ungated, so this component kept rendering the
+ *   stale-but-last-confirmed boolean as fact even while the header toggle honestly showed
+ *   "확인 불가"). Silently reading `undefined` as ON would misreport a real, possibly-OFF
+ *   conversation, in the document-leak direction. See `composerHint`'s own derivation below and
+ *   {@link MessageList}'s own [Caution] for how the three states (`true`/`false`/`undefined`) are
+ *   now told apart at every render site instead of collapsed by a default.
+ * [Caution] `handleSend`'s optional `overrideText` parameter (card T7, chat-prototype-port
+ *   AC-14) exists solely so {@link MessageList}'s empty-state example chips can send a fixed
+ *   string without this component reading it back out of `draft` first (which would require
+ *   an extra `setDraft`/re-render round trip before the value was available to send). A normal
+ *   typed submission (`handleSubmit`/`handleKeyDown` below) always calls `handleSend()` with no
+ *   argument, so `draft` remains authoritative for that path -- see Spec §Tech Review AD-2 for
+ *   why the chips themselves render inside {@link MessageList}, not here.
+ * [Caution] Card T8 fixes the `textarea` `placeholder` to one literal string (chat-prototype-
+ *   port:AC-21) -- the old `conversation.status === "creating"` branch that swapped in a second
+ *   "준비 중" placeholder is gone entirely, not just its text, since that branch was also the
+ *   last surviving source of the retired `"대화 준비 중..."` loading-copy variant (chat-
+ *   prototype-port:AC-7's final all-clear, owned by this card). The hint line below the form
+ *   (`composerHint`, AC-22) and the fixed disclaimer under it (AC-23) both derive from state
+ *   this component already owns/receives (`isSending`, `ragEnabled`) -- neither adds new state.
+ * [Caution] Card T9 (chat-prototype-port:AC-17/AC-18): the composer's submit control swaps, at
+ *   the same position, between the `전송` button (`isSending === false`) and a `생성 중단`
+ *   button (`isSending === true`) -- see the JSX below, not a second piece of state. Clicking
+ *   `생성 중단` calls {@link handleStop}, which aborts `activeStreamController.current` -- the
+ *   exact same `AbortController` this component's own unmount-cleanup effect (above) already
+ *   aborts, so `handleSend`'s catch block cannot (and does not need to) distinguish "user
+ *   clicked stop" from "component unmounted mid-stream": either way it transitions the message
+ *   to a terminal `streamStatus` with whatever text already arrived left intact -- see that
+ *   catch block's own [Caution] for the `sources` value chosen (Spec §Tech Review AD-4,
+ *   user-approved 2026-09-01).
+ * [Caution] Card T10 (chat-prototype-port:AC-19/AC-20, Spec §Tech Review AD-9): a genuine
+ *   stream failure (the non-abort `catch` branch below) no longer rewrites `content` -- no
+ *   inline "메시지를 가져오지 못했습니다." sentence, no "(연결이 끊어졌습니다)" suffix. Whatever
+ *   streamed in before the throw is left exactly as accumulated (possibly `""`); {@link
+ *   MessageList}'s `MessageRow` renders the failure notice itself, as a `role="alert"` error
+ *   card, from `streamStatus === "error"` alone -- entirely separate from `content` now, so the
+ *   two no longer collide in one string. `onRetry` below is `handleSend` itself, reused the
+ *   same way {@link MessageList}'s example chips reuse it (via `overrideText`) -- the error
+ *   card's "다시 시도" button hands back the *failed* turn's own user-message text (Spec D-9:
+ *   same `conversationId`, a new turn, the failed one left in place -- this component never
+ *   deletes a message from `messages` on retry, and there is no delete-turn API to call even if
+ *   it wanted to, Spec §5 "API").
+ * [AC] chat:AC-36, chat:AC-38, chat:AC-39, chat-prototype-port:AC-7, chat-prototype-port:AC-14,
+ *   chat-prototype-port:AC-17, chat-prototype-port:AC-18, chat-prototype-port:AC-19,
+ *   chat-prototype-port:AC-20, chat-prototype-port:AC-21, chat-prototype-port:AC-22,
+ *   chat-prototype-port:AC-23, chat-prototype-port:AC-24, chat-prototype-port:AC-25
  */
 export function ChatPanel({
   conversationId: providedConversationId,
   initialMessages,
   model,
+  // [Caution] (T14's second rework round, chat-prototype-port:AC-9/AC-42, Medium-1) No default value
+  // here anymore -- the previous `= true` default (paired with `ConversationService`'s backend
+  // default for a *brand-new* conversation) silently misrepresented an *already-known*
+  // conversation whose real value this screen may not currently be able to vouch for (card T16's
+  // `ragUnverified` gating on a failed RAG-toggle PATCH -- see this component's own top-of-file
+  // [Caution] for the full rationale, corrected in T16's second rework round).
+  ragEnabled,
   onConversationCreated,
 }: {
   conversationId?: string;
@@ -59,6 +123,10 @@ export function ChatPanel({
   initialMessages?: ChatMessage[];
   /** Forwarded as `streamAssistantReply`'s `model` option on every send (chat:AC-39). */
   model?: string;
+  /** Forwarded to {@link MessageList} for the top badge slot and RAG-OFF notice
+   *  (chat-prototype-port:AC-24/AC-25) -- see this component's own [Caution]. `undefined` is a
+   *  real "not yet known" third state (card T14 finishing work, Medium-1), not defaulted here. */
+  ragEnabled?: boolean;
   /** Fired once this component's own auto-create (no `conversationId` supplied) resolves. */
   onConversationCreated?: (conversation: ConversationResponse) => void;
 }) {
@@ -102,73 +170,113 @@ export function ChatPanel({
     setMessages((prev) => prev.map((m) => (m.id === id ? updater(m) : m)));
   }, []);
 
-  const handleSend = useCallback(async () => {
-    const text = draft.trim();
-    if (text === "" || isSending || conversation.status !== "ready") return;
+  // `overrideText` (chat-prototype-port:AC-14) lets a caller -- currently only
+  // `MessageList`'s example-chip `onExampleSelect` below -- send a fixed string instead of
+  // whatever is currently in the `draft` textarea, without duplicating this function's
+  // stream-lifecycle logic. `handleSubmit`/`handleKeyDown` below keep calling `handleSend()`
+  // with no argument, so `draft` remains the source of truth for a normal typed submission.
+  const handleSend = useCallback(
+    async (overrideText?: string) => {
+      const text = (overrideText ?? draft).trim();
+      if (text === "" || isSending || conversation.status !== "ready") return;
 
-    const conversationId = conversation.conversationId;
-    const userMessage: ChatMessage = { id: nextMessageId("user"), role: "user", content: text };
-    const assistantId = nextMessageId("assistant");
-    const assistantMessage: ChatMessage = {
-      id: assistantId,
-      role: "assistant",
-      content: "",
-      streamStatus: "streaming",
-      sources: null,
-    };
+      const conversationId = conversation.conversationId;
+      const userMessage: ChatMessage = { id: nextMessageId("user"), role: "user", content: text };
+      const assistantId = nextMessageId("assistant");
+      const assistantMessage: ChatMessage = {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        streamStatus: "streaming",
+        sources: null,
+      };
 
-    setMessages((prev) => [...prev, userMessage, assistantMessage]);
-    setDraft("");
-    setIsSending(true);
+      setMessages((prev) => [...prev, userMessage, assistantMessage]);
+      setDraft("");
+      setIsSending(true);
 
-    const controller = new AbortController();
-    activeStreamController.current = controller;
+      const controller = new AbortController();
+      activeStreamController.current = controller;
 
-    let lastFinishReason: string | null = null;
-    // hybrid-rag Spec AC-21: tracks the last non-null `sources` seen across the whole stream,
-    // mirroring `lastFinishReason` above -- but unlike `finishReason`, a still-null value here
-    // after the loop ends is a real, distinct state (BL-019 delivery failure, clause ③), not
-    // "no chunk happened to carry one yet". Never read mid-loop; only meaningful once the
-    // stream has closed (the `for await` below exits), matching {@link streamAssistantReply}'s
-    // own "completion is `done`, not `finishReason`" rule.
-    let lastSources: ChatMessage["sources"] = null;
-    try {
-      for await (const chunk of streamAssistantReply(conversationId, text, { signal: controller.signal, model })) {
-        if (chunk.finishReason !== null) lastFinishReason = chunk.finishReason;
-        // `Array.isArray`, not `!== null` (review 2026-08-31 Low-1) -- a chunk missing the
-        // `sources` key entirely parses to `undefined`, which `!== null` would treat as a
-        // real update and overwrite an already-received array back to `undefined`, silently
-        // discarding real citations mid-stream.
-        if (Array.isArray(chunk.sources)) lastSources = chunk.sources;
-        if (chunk.delta) {
-          const delta = chunk.delta;
-          updateAssistantMessage(assistantId, (m) => ({ ...m, content: m.content + delta }));
+      let lastFinishReason: string | null = null;
+      // hybrid-rag Spec AC-21: tracks the last non-null `sources` seen across the whole
+      // stream, mirroring `lastFinishReason` above -- but unlike `finishReason`, a still-null
+      // value here after the loop ends is a real, distinct state (BL-019 delivery failure,
+      // clause ③), not "no chunk happened to carry one yet". Never read mid-loop; only
+      // meaningful once the stream has closed (the `for await` below exits), matching {@link
+      // streamAssistantReply}'s own "completion is `done`, not `finishReason`" rule.
+      let lastSources: ChatMessage["sources"] = null;
+      try {
+        for await (const chunk of streamAssistantReply(conversationId, text, {
+          signal: controller.signal,
+          model,
+        })) {
+          if (chunk.finishReason !== null) lastFinishReason = chunk.finishReason;
+          // `Array.isArray`, not `!== null` (review 2026-08-31 Low-1) -- a chunk missing the
+          // `sources` key entirely parses to `undefined`, which `!== null` would treat as a
+          // real update and overwrite an already-received array back to `undefined`, silently
+          // discarding real citations mid-stream.
+          if (Array.isArray(chunk.sources)) lastSources = chunk.sources;
+          if (chunk.delta) {
+            const delta = chunk.delta;
+            updateAssistantMessage(assistantId, (m) => ({ ...m, content: m.content + delta }));
+          }
         }
+        updateAssistantMessage(assistantId, (m) => ({
+          ...m,
+          streamStatus: isErrorFinish(lastFinishReason) ? "error" : "done",
+          sources: lastSources,
+        }));
+      } catch (err: unknown) {
+        if (isAbortError(err)) {
+          // Card T9 (chat-prototype-port:AC-18), Spec §Tech Review AD-4 option (b),
+          // user-approved 2026-09-01: an abort here comes from either a user clicking `생성
+          // 중단` ({@link handleStop}) or this component's own unmount-cleanup effect --
+          // this branch cannot tell which, and does not need to. Either way it is an
+          // intentional cancel, not a failure: `streamStatus` moves to `"done"`, never
+          // `"error"`, and `content` is left exactly as already accumulated (no suffix, no
+          // rewrite -- AC-18's "이미 도착한 텍스트는 화면에 남는다"). `sources` uses
+          // `lastSources ?? undefined`, not `lastSources` alone -- a still-`null` `lastSources`
+          // (no chunk ever carried one) must not reach {@link MessageList}'s `SourceList`,
+          // whose clause ③ would then render "출처를 불러오지 못했습니다." and misreport a
+          // user-initiated stop as a delivery failure (AD-4 rejected exactly this, option (a)).
+          // `undefined` instead routes through `SourceList`'s "no stream was ever tracked for
+          // this message" branch -- the same one a history-loaded message hits -- which is
+          // accurate here: this message's stream tracking did end, deliberately, without ever
+          // resolving a sources value. Input re-activation (AC-18's third clause) needs no
+          // separate handling -- the `finally` block below unconditionally sets `isSending`
+          // back to `false` on every exit path, including this one.
+          updateAssistantMessage(assistantId, (m) => ({
+            ...m,
+            streamStatus: "done",
+            sources: lastSources ?? undefined,
+          }));
+          return;
+        }
+        // Card T10 (chat-prototype-port:AC-19, Spec §Tech Review AD-9): `content` is left
+        // untouched here -- no inline "메시지를 가져오지 못했습니다." sentence, no
+        // "(연결이 끊어졌습니다)" suffix appended to whatever text already arrived (possibly
+        // `""`). `streamStatus: "error"` alone is what {@link MessageList}'s `MessageRow`
+        // reads to render the `role="alert"` error card below the (unmodified) content.
+        // `sources: lastSources` here too (review 2026-08-31 round-2 correctness Low-2) -- a
+        // chunk carrying real citations can arrive before a later chunk throws, so this must
+        // not unconditionally discard back to `null`: whatever was actually received survives
+        // (clause ②), and only a genuinely empty-handed stream falls through to clause ③'s
+        // "출처를 불러오지 못했습니다." (deliberate either way, not redundant with the error
+        // card above it -- one says the reply itself failed, the other reports the citation
+        // data).
+        updateAssistantMessage(assistantId, (m) => ({
+          ...m,
+          streamStatus: "error",
+          sources: lastSources,
+        }));
+      } finally {
+        if (activeStreamController.current === controller) activeStreamController.current = null;
+        setIsSending(false);
       }
-      updateAssistantMessage(assistantId, (m) => ({
-        ...m,
-        streamStatus: isErrorFinish(lastFinishReason) ? "error" : "done",
-        sources: lastSources,
-      }));
-    } catch (err: unknown) {
-      if (isAbortError(err)) return; // intentional cancel (unmount) -- not a failure to report
-      // `sources: lastSources` here too (review 2026-08-31 round-2 correctness Low-2) -- a
-      // chunk carrying real citations can arrive before a later chunk throws, so this must not
-      // unconditionally discard back to `null`: whatever was actually received survives (clause
-      // ②), and only a genuinely empty-handed stream falls through to clause ③'s "출처를
-      // 불러오지 못했습니다." (deliberate either way, not redundant with the content-level error
-      // text above it -- one says the reply itself failed, the other reports the citation data).
-      updateAssistantMessage(assistantId, (m) => ({
-        ...m,
-        content: m.content === "" ? "메시지를 가져오지 못했습니다." : `${m.content}\n\n(연결이 끊어졌습니다)`,
-        streamStatus: "error",
-        sources: lastSources,
-      }));
-    } finally {
-      if (activeStreamController.current === controller) activeStreamController.current = null;
-      setIsSending(false);
-    }
-  }, [conversation, draft, isSending, model, updateAssistantMessage]);
+    },
+    [conversation, draft, isSending, model, updateAssistantMessage],
+  );
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -189,6 +297,19 @@ export function ChatPanel({
     [handleSend],
   );
 
+  /**
+   * [Purpose] Handler for the `생성 중단` button (card T9, chat-prototype-port:AC-18) --
+   *   aborts whatever stream `handleSend` is currently tracking.
+   * [Caution] Only reachable while `isSending` is true, since the button that calls this only
+   *   renders then (see the JSX below) -- the optional-chaining call is defense in depth, not a
+   *   condition this function itself needs to branch on. The actual state transition (terminal
+   *   `streamStatus`, `sources`, text left intact) happens in `handleSend`'s own catch block,
+   *   not here -- this function only signals the abort.
+   */
+  const handleStop = useCallback(() => {
+    activeStreamController.current?.abort();
+  }, []);
+
   if (conversation.status === "error") {
     return (
       <p role="alert" className={styles.error}>
@@ -198,30 +319,84 @@ export function ChatPanel({
   }
 
   const inputDisabled = conversation.status !== "ready" || isSending;
+  // chat-prototype-port:AC-22 -- derived straight from `isSending`/`ragEnabled` (both already
+  // tracked above/passed in), not a new piece of state: a streaming reply always wins over the
+  // RAG-scoped hint, matching this component's own [Caution] that `ragEnabled` is a per-
+  // conversation setting, not a per-turn one, so it has nothing meaningful to say while a turn
+  // is actively in flight. `ragEnabled === true`/`=== false` (card T14 finishing work, Medium-1),
+  // not a truthy/falsy check on the raw value -- `undefined` ("not yet known") must not silently
+  // read as either ON or OFF copy (chat-prototype-port:AC-42's "0 of each" requirement extends
+  // to this hint too, not only the header toggle).
+  const composerHint = isSending
+    ? "응답을 스트리밍 중입니다 · 입력이 잠시 비활성화됩니다"
+    : ragEnabled === true
+      ? "문서 근거 ON · 사내 문서에서 검색한 뒤 답변합니다"
+      : ragEnabled === false
+        ? "문서 근거 OFF · 모델의 일반 지식만으로 답변합니다"
+        : "문서 근거 확인 중…";
 
   return (
     <div className={styles.panel}>
-      <MessageList messages={messages} />
-      <form onSubmit={handleSubmit} className={styles.form}>
-        <label htmlFor="chat-message-input" className={styles.visuallyHidden}>
-          메시지
-        </label>
-        <textarea
-          id="chat-message-input"
-          className={styles.textarea}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            conversation.status === "creating" ? "대화 준비 중..." : "메시지를 입력하세요 (Enter로 전송, Shift+Enter로 줄바꿈)"
-          }
-          disabled={inputDisabled}
-          rows={3}
-        />
-        <button type="submit" className={styles.button} disabled={inputDisabled || draft.trim() === ""}>
-          전송
-        </button>
-      </form>
+      <MessageList
+        messages={messages}
+        ragEnabled={ragEnabled}
+        isSending={isSending}
+        onExampleSelect={(text) => void handleSend(text)}
+        onRetry={(text) => void handleSend(text)}
+      />
+      {/* Prototype P:399-423 -- one card (the form) holding the textarea and a bottom row with
+          the state hint (AC-22) and the submit control; the fixed disclaimer (AC-23) sits
+          centered under the card. Purely a layout regrouping: every element, id, and text is
+          the same as before. */}
+      <div className={styles.composer}>
+        <div className={styles.composerInner}>
+          <form onSubmit={handleSubmit} className={styles.form}>
+            <label htmlFor="chat-message-input" className={styles.visuallyHidden}>
+              메시지
+            </label>
+            <textarea
+              id="chat-message-input"
+              className={styles.textarea}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="사내 문서에 대해 질문하세요. Shift + Enter 로 줄바꿈."
+              disabled={inputDisabled}
+              rows={2}
+            />
+            <div className={styles.composerRow}>
+              <p className={styles.composerHint}>{composerHint}</p>
+              {/* chat-prototype-port:AC-17 -- same-position swap keyed on `isSending`: exactly
+                  one of `전송`/`생성 중단` renders at a time, never both/neither (Spec
+                  `P:406-419`). The glyphs are decorative (`aria-hidden`), so each button's
+                  accessible name stays exactly "전송" / "생성 중단". */}
+              {isSending ? (
+                <button type="button" className={styles.stopButton} onClick={handleStop}>
+                  <span className={styles.stopIcon} aria-hidden="true" />
+                  생성 중단
+                </button>
+              ) : (
+                <button type="submit" className={styles.button} disabled={inputDisabled || draft.trim() === ""}>
+                  전송
+                  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" className={styles.buttonIcon}>
+                    <path
+                      d="M2.5 11.5 L11.5 2.5 M5.5 2.5 H11.5 V8.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </form>
+          <p className={styles.composerNotice}>
+            답변은 사내 문서를 근거로 생성됩니다. 중요한 결정 전에는 원문을 확인하세요.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

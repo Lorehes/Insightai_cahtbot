@@ -244,7 +244,7 @@ function UsageContent({ data, range }: { data: UsageResponse; range: DateRange }
 
       {data.missingCostCount > 0 && (
         <div role="alert" className={styles.warningBanner}>
-          <span aria-hidden="true">⚠</span>
+          <WarningGlyph size={17} className={styles.warningBannerIcon} />
           <p>
             <strong>{formatCount(data.missingCostCount)}건의 호출은 비용을 계산하지 못했습니다.</strong>{" "}
             응답에 단가 정보가 없어 위의 총 비용에서 빠져 있습니다. 실제 청구액은 표시된 금액보다 클 수
@@ -282,7 +282,7 @@ function MetricCard({
   return (
     <div className={tone === "warn" ? styles.metricCardWarn : styles.metricCard}>
       <div className={styles.metricLabel}>
-        {tone === "warn" && <span aria-hidden="true">⚠ </span>}
+        {tone === "warn" && <WarningGlyph size={15} className={styles.metricLabelIcon} />}
         {label}
       </div>
       <div className={styles.metricValue}>
@@ -290,6 +290,19 @@ function MetricCard({
       </div>
       <p className={styles.metricHint}>{hint}</p>
     </div>
+  );
+}
+
+/** Prototype's warning triangle (AdminUsage blob P:104-108 / MetricCard blob P:21-25) --
+ *  decorative and text-free (`aria-hidden`), so the surrounding element's own text is unchanged;
+ *  the "warn" meaning is still carried by the label/banner text, never by this glyph alone. */
+function WarningGlyph({ size, className }: { size: number; className: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 12 12" aria-hidden="true" className={className}>
+      <path d="M6 1.4 L11.2 10.4 H0.8 Z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M6 4.9 V7.1" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="6" cy="8.8" r="0.72" fill="currentColor" />
+    </svg>
   );
 }
 
