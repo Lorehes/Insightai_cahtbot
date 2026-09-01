@@ -10,7 +10,9 @@ import art.insightai.chatbot.eval.evalset.EvalCase;
  *   {@link EvalResponse} fixtures in tests.
  * [Rationale] Tech Review D-3 fixes every rule this class implements:
  *   {@code answer_correct} = every {@code expectContains} string is a substring of the answer
- *   (no normalization); {@code source_correct} = {@code expectSource} is among
+ *   after whitespace is removed from both (D-3 revised 2026-09-01, BL-043 (a) -- the original
+ *   "no normalization" rule mis-scored "17 명" against "17명"; see {@link #stripWhitespace});
+ *   {@code source_correct} = {@code expectSource} is among
  *   {@code sourceFilenames}; {@code not_found_correct} = the refusal phrase is present AND
  *   {@code sourceFilenames} is empty; {@code hallucination} = the refusal phrase is absent.
  *   The refusal-phrase match itself is deterministic, not an LLM-as-judge call: hybrid-rag
@@ -61,9 +63,29 @@ public final class EvalJudge {
      *   tell a wrong-answer FAIL apart from a right-answer-wrong-citation FAIL (AC-4).
      */
     public static JudgeResult.Found judgeFound(EvalCase.Found evalCase, EvalResponse response) {
-        boolean answerCorrect = evalCase.expectContains().stream().allMatch(response.answer()::contains);
+        String answer = stripWhitespace(response.answer());
+        boolean answerCorrect = evalCase.expectContains().stream()
+                .map(EvalJudge::stripWhitespace)
+                .allMatch(answer::contains);
         boolean sourceCorrect = response.sourceFilenames().contains(evalCase.expectSource());
         return new JudgeResult.Found(answerCorrect, sourceCorrect);
+    }
+
+    /**
+     * [Purpose] Removes every whitespace character (ASCII and Unicode separators) so the {@code
+     *   answer_correct} substring check ignores spacing only -- D-3 as revised by BL-043 (a),
+     *   2026-09-01, user decision.
+     * [Rationale] The D7 sweep judged "17 명 (정규직 기준)" and "12 년째" as wrong against {@code
+     *   expect_contains} "17명"/"12년": the product was right and the judge was not (the same
+     *   INC-024 family as the free-form refusal misclassification). Whitespace is the only
+     *   normalization applied -- no case folding, no punctuation stripping, no semantic matching
+     *   -- because anything looser would start counting wrong answers as right, which is the
+     *   opposite misclassification (insight-chat-7f's caution on BL-043).
+     * [Caution] Applied to both sides, so an {@code expect_contains} string that itself contains
+     *   a space ("서초구 반포대로" style) still matches an answer that spaces it differently.
+     */
+    static String stripWhitespace(String text) {
+        return text.replaceAll("[\\s\\p{Z}]+", "");
     }
 
     /**

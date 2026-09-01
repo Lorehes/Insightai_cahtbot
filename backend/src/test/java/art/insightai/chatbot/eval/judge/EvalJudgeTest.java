@@ -41,6 +41,32 @@ class EvalJudgeTest {
     }
 
     @Test
+    @DisplayName("[eval-usage-dashboard:AC-3] expect_contains 와 답변의 공백(ASCII·유니코드 구분자) 차이는 무시된다 — "
+            + "\"17 명\" 은 \"17명\" 을, \"서초구 반포대로\" 는 \"서초구반포대로\" 를 만족한다 (BL-043 (a), D-3 개정)")
+    void foundCaseIgnoresWhitespaceDifferencesOnly() {
+        EvalCase.Found spaced = new EvalCase.Found("직원 수?", "doc.pdf", List.of("17명", "서초구 반포대로"));
+        EvalResponse response = new EvalResponse(
+                "17 명 (정규직 기준)이며 주소는 서초구 반포대로 20길입니다.", List.of("doc.pdf"), 1L, null);
+
+        assertThat(EvalJudge.judgeFound(spaced, response).answerCorrect()).isTrue();
+    }
+
+    @Test
+    @DisplayName("[eval-usage-dashboard:AC-3] 공백 외의 차이(대소문자·구두점·글자 삽입)는 여전히 FAIL 이다 — 정규화는 공백만 접는다")
+    void foundCaseStillFailsOnAnyNonWhitespaceDifference() {
+        EvalCase.Found expect = new EvalCase.Found("q", "doc.pdf", List.of("17명", "plan@insightai.art"));
+        assertThat(EvalJudge.judgeFound(expect,
+                new EvalResponse("17개 사업, 명단은 plan@insightai.art", List.of("doc.pdf"), 1L, null)).answerCorrect())
+                .as("characters of the expected string separated by other characters do not match").isFalse();
+        assertThat(EvalJudge.judgeFound(expect,
+                new EvalResponse("17명, PLAN@INSIGHTAI.ART", List.of("doc.pdf"), 1L, null)).answerCorrect())
+                .as("no case folding").isFalse();
+        assertThat(EvalJudge.judgeFound(expect,
+                new EvalResponse("17.명 plan@insightai.art", List.of("doc.pdf"), 1L, null)).answerCorrect())
+                .as("no punctuation stripping").isFalse();
+    }
+
+    @Test
     @DisplayName("[eval-usage-dashboard:AC-3] expect_contains 중 1개라도 누락되면 FAIL")
     void foundCaseFailsWhenAnExpectContainsStringIsMissing() {
         // given: the answer is missing "설립" even though it cites the right source
