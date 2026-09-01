@@ -3,6 +3,7 @@ package art.insightai.chatbot.rag.ingest;
 import java.util.List;
 import java.util.UUID;
 
+import org.springframework.ai.document.DefaultContentFormatter;
 import org.springframework.stereotype.Component;
 
 import art.insightai.chatbot.rag.domain.Document;
@@ -38,6 +39,11 @@ import art.insightai.chatbot.rag.domain.Document;
  *     Postgres's {@code json} column verbatim (verified by inserting through the real {@code
  *     VectorStore} bean against the live ParadeDB container and reading the raw column back). No
  *     workaround was needed for this half of AD-9 -- only item 1 above required one.</li>
+ *     <li>BL-023 (2026-09-01): item 1's null {@code page} value also crashes the real (non-stub)
+ *     embedding path with a {@code NullPointerException} -- every integration test ran against
+ *     {@code StubEmbeddingModel} and never exercised it, so this went undetected until a real
+ *     document was embedded for the first time. {@link #excludeNullablePageFromFormatting}
+ *     resolves it; see that method's own Javadoc for the mechanism.</li>
  *   </ol>
  * [Caution] {@link DocumentParser}'s Javadoc documents that {@code TikaDocumentReader} never
  *   exposes any page-boundary metadata at all -- not even a document-level page count -- for any
@@ -62,6 +68,17 @@ public class ChunkMetadataBuilder {
     private static final String ACL_ALL = "ALL";
 
     /**
+     * [Purpose] Shared across every chunk of every document (performance review, 2026-09-01) --
+     *   {@code DefaultContentFormatter} is immutable/thread-safe (all fields {@code private final},
+     *   no setters) and this instance is identical for every chunk, so building it once here avoids
+     *   a small per-chunk allocation in {@link #excludeNullablePageFromFormatting}.
+     */
+    private static final DefaultContentFormatter PAGE_EXCLUDED_FORMATTER = DefaultContentFormatter.builder()
+            .withExcludedEmbedMetadataKeys(KEY_PAGE)
+            .withExcludedInferenceMetadataKeys(KEY_PAGE)
+            .build();
+
+    /**
      * [Purpose] Stamps the AC-8 metadata keys onto every chunk, in list order.
      * [Side effects] Mutates each element of {@code chunks} in place (see class Javadoc item 1)
      *   and returns the same list instance for convenient chaining.
@@ -79,8 +96,49 @@ public class ChunkMetadataBuilder {
             chunk.getMetadata().put(KEY_DEPT, DEPT_ALL);
             chunk.getMetadata().put(KEY_ACL, ACL_ALL);
             chunk.getMetadata().put(KEY_PAGE, resolvePage(chunk));
+            excludeNullablePageFromFormatting(chunk);
         }
         return chunks;
+    }
+
+    /**
+     * [Purpose] Keeps the {@code page} metadata key out of the text handed to the embedding
+     *   model, while leaving it in {@code chunk.getMetadata()} untouched.
+     * [Rationale] {@code page} is null on every chunk today (see class Javadoc), and the real
+     *   (non-stub) embedding path -- {@code OpenAiEmbeddingModel.getEmbeddingContent} ->
+     *   {@code Document.getFormattedContent} -> {@code DefaultContentFormatter.metadataFilter}
+     *   (this chunk type's {@code MetadataMode} is {@code EMBED}, confirmed by this fix's own
+     *   before/after experiment: reverting it reproduces the crash, so the mode cannot be
+     *   {@code ALL} or {@code NONE}) -- rebuilds the metadata map with {@code Collectors.toMap},
+     *   which throws {@code NullPointerException} on any null value. No test caught this before
+     *   BL-023 because every integration test runs against {@code StubEmbeddingModel}, which
+     *   never calls {@code getFormattedContent}. Excluding {@code page} from {@code EMBED} mode
+     *   removes the null entry before that collector ever sees it, while satisfying AC-8's
+     *   requirement that {@code page} still be null rather than absent or a sentinel.
+     *   {@code withExcludedInferenceMetadataKeys(KEY_PAGE)} is also set, but is inert rather than
+     *   protective (correctness review, 2026-09-01): the chunk instance this method mutates never
+     *   reaches chat inference at all -- {@code SpringAiDocumentRetrieverAdapter.toDocument}
+     *   builds a brand-new {@code Document} from the search result row via a metadata whitelist
+     *   that already drops null values (that class's own Javadoc), so no formatter this class sets
+     *   is ever consulted on the retrieval/chat-prompt side. It is kept anyway as cheap defensive
+     *   redundancy against a future change that reuses this chunk instance downstream, not because
+     *   it currently guards anything.
+     * [Caution] {@code PgVectorStore.toJson} serializes {@code chunk.getMetadata()} directly with
+     *   a plain {@code JsonMapper} and never calls this content formatter, so the stored
+     *   {@code vector_store_bgem3.metadata} column still gets a literal {@code "page": null}
+     *   (confirmed in the class Javadoc's item 2). Do not remove the {@code EMBED} exclusion
+     *   assuming {@code page} is harmless -- doing so reintroduces the NPE the moment a document
+     *   is embedded for real instead of through the stub. This defense is scoped to {@code EMBED}/
+     *   {@code INFERENCE} only: a caller that invokes {@code chunk.getFormattedContent()}
+     *   (no-arg, {@code MetadataMode.ALL}) or a future {@code spring.ai.openai.embedding.metadata-
+     *   mode: ALL} setting bypasses both exclusions -- whether that reproduces this exact {@code
+     *   NullPointerException} or merely renders the literal text {@code "null"} depends on which
+     *   code path in {@code DefaultContentFormatter} handles {@code MetadataMode.ALL} (unverified
+     *   in this fix, correctness review 2026-09-01); treat it as unsafe either way.
+     * [AC] document-ingestion:AC-8
+     */
+    private void excludeNullablePageFromFormatting(org.springframework.ai.document.Document chunk) {
+        chunk.setContentFormatter(PAGE_EXCLUDED_FORMATTER);
     }
 
     /**

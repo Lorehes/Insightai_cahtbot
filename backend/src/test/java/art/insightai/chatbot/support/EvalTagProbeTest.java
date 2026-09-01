@@ -8,8 +8,12 @@ import org.junit.jupiter.api.Test;
 
 /**
  * [Purpose] Permanent regression probe for the eval-tag Maven Surefire split configured in
- * {@code backend/pom.xml} (default build: {@code excludedGroups=eval}; {@code -Peval} profile:
- * {@code groups=eval}). This class asserts nothing about production code -- its only signal is
+ * {@code backend/pom.xml} (default build: {@code excludedGroups=eval | eval-infra}; {@code -Peval}
+ * profile: {@code groups=eval}). See {@link EvalInfraTagProbeTest} for the sibling probe covering
+ * the {@code eval-infra} half of that expression (BL-024, 2026-09-01) -- this class only proves
+ * {@code eval} stays excluded, not {@code eval-infra}; the two tags regress independently (e.g. an
+ * edit that narrows {@code excludedGroups} back to {@code eval} alone). This class asserts nothing
+ * about production code -- its only signal is
  * whether it shows up at all in the JUnit Platform "Tests run" summary. If the exclusion
  * silently regresses (e.g. a future pom.xml edit drops {@code excludedGroups} or the
  * {@code combine.self="override"} on the profile side), a plain {@code ./mvnw test} would start
@@ -30,6 +34,8 @@ import org.junit.jupiter.api.Test;
  * Re-verify with (run from {@code backend/}, no {@code -Dtest} scoping):
  *   ./mvnw test          (expect: this class does NOT appear in the executed test list)
  *   ./mvnw test -Peval    (expect: this class DOES appear, 1 test, PASS)
+ *   ./mvnw test -Peval-infra (expect: this class does NOT appear -- only {@link
+ *     EvalInfraTagProbeTest} should)
  */
 @Tag("eval")
 class EvalTagProbeTest {

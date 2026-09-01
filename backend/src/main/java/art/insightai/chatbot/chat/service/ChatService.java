@@ -50,7 +50,7 @@ import java.util.concurrent.atomic.AtomicReference;
  *   'user' row exists even if the caller disconnects before a single token streams; T10's history
  *   read (②) and this card's stream (③) come after; ④ the 'assistant' row is written once the
  *   stream reaches a terminal signal — completion, error, or cancellation alike (chat Spec §7
- *   OQ-6; T9 rework 2026-08-27, correctness High-1) — via {@link #streamReply}'s three
+ *   OQ-6; T9 rework 2026-08-27, correctness High-1) — via {@link #streamReply(Conversation, String, String, Integer)}'s three
  *   termination hooks, which all funnel into the same guarded {@link #onStreamTerminated}
  *   helper (see that method's own [Rationale] for why three hooks, not one {@code doFinally}).
  *   Neither {@link #recordUserMessage} nor the assistant-side persistence calls
@@ -58,13 +58,13 @@ import java.util.concurrent.atomic.AtomicReference;
  *   ConversationService#persistUserTurn}/{@link ConversationService#persistAssistantTurn}, two
  *   {@code public @Transactional} methods on a *different* bean. This class's own methods run
  *   both from the synchronous prelude and from inside a {@code Flux} operator that may run on a
- *   different thread after {@link #streamReply} has already returned (Tech Review A-8) — a
+ *   different thread after {@link #streamReply(Conversation, String, String, Integer)} has already returned (Tech Review A-8) — a
  *   {@code @Transactional} method declared on this class itself would silently lose its
  *   transactional behavior via Spring AOP self-invocation (a proxy only applies to calls arriving
  *   from another bean's reference, never a same-class {@code this} call); routing through the
  *   injected {@code conversationService} field sidesteps that entirely, on top of already
  *   avoiding the detached-entity risk {@link Conversation}'s own [Caution] warns this exact card
- *   about (this class never calls {@code conversationRepository.save}). {@link #streamReply} also
+ *   about (this class never calls {@code conversationRepository.save}). {@link #streamReply(Conversation, String, String, Integer)} also
  *   enforces {@code app.session.max-messages-per-conversation} (T9 rework, security Medium-3;
  *   user decision D-3①) via {@link ConversationService#enforceMessageQuota}, before {@link
  *   #recordUserMessage} runs and before any LLM call, so an exceeded conversation is rejected at
@@ -72,7 +72,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * [Caution] The per-message {@code model} override accepted by {@code
  *   ConversationController.SendMessageRequest} is honored as of T9 rework 2026-08-27 (correctness
  *   D-4 — previously validated by {@code ConversationService#prepareMessageSend} but then
- *   silently discarded): {@link #streamReply} takes the caller's {@code requestedModel} as an
+ *   silently discarded): {@link #streamReply(Conversation, String, String, Integer)} takes the caller's {@code requestedModel} as an
  *   explicit parameter and uses it for both the actual OpenRouter call and the persisted
  *   'assistant' row's {@code model} column, falling back to {@code conversation.getModel()} only
  *   when {@code null}/blank — exactly what {@code prepareMessageSend}'s own [Rationale] already
@@ -93,7 +93,7 @@ import java.util.concurrent.atomic.AtomicReference;
  *   #chatMemory}, a {@link MessageWindowChatMemory} built from {@link MessageChatMemoryRepository}
  *   in the constructor below, is read (never written — see {@link MessageChatMemoryRepository}'s
  *   own class-level [Rationale] for why {@code add()}/{@code saveAll()} are never called) inside
- *   {@link #streamReply}'s synchronous prelude; that method's own [Rationale] explains exactly why
+ *   {@link #streamReply(Conversation, String, String, Integer)}'s synchronous prelude; that method's own [Rationale] explains exactly why
  *   a single {@code .messages(history)} call replaces the previous {@code .user(userMessage)} call
  *   rather than sitting alongside it.
  */
@@ -114,7 +114,7 @@ public class ChatService {
     private final ObjectMapper objectMapper;
 
     /**
-     * [Purpose] Wires the six collaborators {@link #streamReply} needs: the fluent LLM client,
+     * [Purpose] Wires the six collaborators {@link #streamReply(Conversation, String, String, Integer)} needs: the fluent LLM client,
      *   the transactional persistence delegate, (T10) the multi-turn history reader, (hybrid-rag
      *   T10) the RAG advisor pair conditionally attached per request, and (hybrid-rag T11) the
      *   {@code RetrievedChunk}-&gt;{@code SourceRef} mapper plus the JSON codec {@link
@@ -132,7 +132,7 @@ public class ChatService {
      *   chatClientBuilder.defaultAdvisors(...)} in this constructor, because attaching it
      *   unconditionally would run RAG for every conversation regardless of {@code rag_enabled}
      *   (hybrid-rag Tech Review D-T9: RAG ON/OFF is this class's decision, not the retriever's —
-     *   see {@link #streamReply}'s own [Rationale] for the per-request conditional attachment this
+     *   see {@link #streamReply(Conversation, String, String, Integer)}'s own [Rationale] for the per-request conditional attachment this
      *   field exists to support). T10 rework round 1 (review Block security Medium-2) first closed "RAG
      *   attached without the guard" as a single {@code List<Advisor>} (this class previously held
      *   the pair as two separate constructor parameters, which let a future edit attach one without
@@ -170,8 +170,19 @@ public class ChatService {
     }
 
     /**
+     * [Purpose] Convenience overload of {@link #streamReply(Conversation, String, String, Integer)}
+     *   with no {@code maxTokens} override -- the path every production caller uses. See that
+     *   method for this class's full behavior (RAG attachment, persistence, termination hooks).
+     */
+    public Flux<ChatChunk> streamReply(Conversation conversation, String requestedModel, String userMessage) {
+        return streamReply(conversation, requestedModel, userMessage, null);
+    }
+
+    /**
      * [Purpose] Streams {@code conversation}'s reply to {@code userMessage} as SSE chunks, and
-     *   persists both the 'user' and 'assistant' {@code messages} rows.
+     *   persists both the 'user' and 'assistant' {@code messages} rows. When {@code maxTokensOverride}
+     *   is non-null, it is also passed through to {@code OpenAiChatOptions.maxTokens(...)} for
+     *   this call only -- see the "Overload rationale (BL-024)" paragraph below.
      * [Rationale] {@code conversation} is the (possibly detached — see class [Caution] and
      *   {@code ConversationService#prepareMessageSend}'s own [Caution]) entity {@code
      *   ConversationController} already resolved and validated synchronously (chat:AC-17,
@@ -328,10 +339,28 @@ public class ChatService {
      *   — {@code RagAdvisorAssemblyTest}/{@code ChatServiceRagAttachmentTest} exercise the pipeline
      *   with {@code StubChatModel} (zero real latency), so this risk is not evidenced by either
      *   test suite; no AC or defense for it exists yet.
+     * [Caution] <b>Overload rationale (BL-024, 2026-09-01):</b> {@code eval-usage-dashboard:AC-20b}'s positive control needs a real (non-stub)
+     *   OpenRouter call that actually returns {@code finish_reason=length}, through this exact
+     *   production path (RAG advisor attachment, persistence, {@link
+     *   ChatChunk#normalizeFinishReason}) rather than a hand-rolled call elsewhere — BL-024,
+     *   2026-09-01 user approval. This is an overload, not a default parameter (Java has none), so
+     *   the pre-existing 3-arg method above (~11 call sites: {@code ConversationController} plus
+     *   test fixtures) recompiles unchanged and keeps passing {@code null} here, which sets no
+     *   {@code maxTokens} at all — byte-for-byte the same {@link OpenAiChatOptions} this method
+     *   built before this overload existed.
+     *   <b>Scope of the override:</b> This parameter is for the eval sweep's one-off positive-control call only. Do not
+     *   wire it into {@code ConversationController} or any other production caller — introducing a
+     *   real {@code maxTokens} default on the normal chat path is exactly the {@code BL-004}
+     *   decision this class's [Rationale] javadoc (above) says is still open (truncating output
+     *   produces {@code finish_reason=length} with no truncation indicator shown to the user).
+     *   Making that call here, implicitly, by wiring this override into a production caller would
+     *   pre-empt that decision without it actually being made.
      * [AC] chat:AC-30, chat:AC-34, hybrid-rag:AC-5, hybrid-rag:AC-9, hybrid-rag:AC-10,
-     *   hybrid-rag:AC-11, hybrid-rag:AC-12, hybrid-rag:AC-14
+     *   hybrid-rag:AC-11, hybrid-rag:AC-12, hybrid-rag:AC-14,
+     *   eval-usage-dashboard:AC-20b
      */
-    public Flux<ChatChunk> streamReply(Conversation conversation, String requestedModel, String userMessage) {
+    public Flux<ChatChunk> streamReply(Conversation conversation, String requestedModel, String userMessage,
+            Integer maxTokensOverride) {
         UUID conversationId = conversation.getId();
         String conversationIdText = conversationId.toString();
 
@@ -359,16 +388,23 @@ public class ChatService {
         // just below to decide whether to attach the advisor pair at all.
         boolean ragEnabled = conversation.isRagEnabled();
 
-        ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt()
-                .messages(history)
+        // eval-usage-dashboard:AC-20b (BL-024): applied only when the eval sweep's positive-control
+        // call passes a non-null override -- every production caller passes null via the 3-arg
+        // overload above, so .maxTokens() is never called on this builder outside that one case.
+        OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder().model(model)
                 // extraBody is OpenRouter's own extension, not a standard OpenAI request field --
                 // S1 spike (state.md, 2026-08-25) confirmed the provider only attaches its `cost`
                 // field to the response's usage payload when this flag is set per request; the
                 // standard `include_usage` option (already defaulted on for streaming by
                 // OpenAiChatModel.createRequest()) gets prompt/completion token counts without it,
                 // but never `cost` (chat:AC-32, chat:AC-33).
-                .options(OpenAiChatOptions.builder().model(model)
-                        .extraBody(Map.of("usage", Map.of("include", true))));
+                .extraBody(Map.of("usage", Map.of("include", true)));
+        if (maxTokensOverride != null) {
+            optionsBuilder = optionsBuilder.maxTokens(maxTokensOverride);
+        }
+        ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt()
+                .messages(history)
+                .options(optionsBuilder);
 
         // hybrid-rag T10 (AC-9 clause①, AC-10, AC-14 final): attach the RAG advisor pair only for a
         // conversation that opted in -- .advisors(...) is skipped entirely (not called with an
@@ -417,7 +453,7 @@ public class ChatService {
      * [Side effects] Appends {@code text} to {@code contentBuilder} and, when this response
      *   carries a non-null finish reason, normalizes it via {@link
      *   ChatChunk#normalizeFinishReason} (BL-003, 2026-08-30 user decision) and stores the
-     *   normalized value in {@code finishReasonHolder} — {@link #streamReply}'s termination hooks
+     *   normalized value in {@code finishReasonHolder} — {@link #streamReply(Conversation, String, String, Integer)}'s termination hooks
      *   (via {@link #onStreamTerminated}) read both once the stream ends. Likewise, when this
      *   response's {@code usage} is non-zero, extracts it via {@link #extractUsage} and stores it
      *   in {@code usageHolder} (T11) — per the S1 spike (state.md, 2026-08-25), every non-terminal
@@ -468,7 +504,7 @@ public class ChatService {
      *   instead (populated unconditionally by {@code RetrievalAugmentationAdvisor#before}, not
      *   gated by {@code onFinishReason()}) — which means subscribing to {@code
      *   .stream().chatClientResponse()} instead of today's {@code .stream().chatResponse()} in
-     *   {@link #streamReply}, a wider API-surface change this bugfix card's scope did not cover and
+     *   {@link #streamReply(Conversation, String, String, Integer)}, a wider API-surface change this bugfix card's scope did not cover and
      *   whose context-propagation-through-the-full-chain behavior is unverified in this codebase.
      *   {@code BL-019} therefore remains open on both the wire and storage axes as of this
      *   investigation; not resolved by this method.
@@ -510,7 +546,7 @@ public class ChatService {
      *   not an absent field, in their respective zero-citation cases).
      * [Rationale] {@code !ragEnabled} short-circuits to {@code List.of()} before ever touching
      *   {@code response.getMetadata()} — {@code RetrievalAugmentationAdvisor} is never attached to
-     *   this request at all when RAG is disabled (see {@link #streamReply}'s own [Rationale]), so
+     *   this request at all when RAG is disabled (see {@link #streamReply(Conversation, String, String, Integer)}'s own [Rationale]), so
      *   no {@code DOCUMENT_CONTEXT} key can exist on this response either way (hybrid-rag:AC-10
      *   clause②). When RAG is enabled, {@link RetrievalAugmentationAdvisor#DOCUMENT_CONTEXT} is read
      *   directly off {@code response.getMetadata()} — confirmed by reading {@code
@@ -707,7 +743,7 @@ public class ChatService {
      * [Purpose] Inserts the 'user' {@code messages} row for {@code content}, and — per Tech
      *   Review A-12 — sets {@code conversations.title} when {@code titleIfUnset} is non-{@code
      *   null} and bumps {@code conversations.updated_at}.
-     * [Rationale] Runs before the {@link Flux} in {@link #streamReply} is even built, so this row
+     * [Rationale] Runs before the {@link Flux} in {@link #streamReply(Conversation, String, String, Integer)} is even built, so this row
      *   exists regardless of whether the client stays connected long enough for a single token to
      *   stream. {@code model} is intentionally {@code null} on this row — see {@link Message}'s
      *   own class-level Javadoc ("the 'user' row has no model/token/cost data"). Delegates the
@@ -722,7 +758,7 @@ public class ChatService {
     }
 
     /**
-     * [Purpose] Shared endpoint for {@link #streamReply}'s three termination hooks ({@code
+     * [Purpose] Shared endpoint for {@link #streamReply(Conversation, String, String, Integer)}'s three termination hooks ({@code
      *   doOnComplete}, {@code doOnCancel}, {@code onErrorResume}): decides {@code finishReason}
      *   from {@code signalType} and calls {@link #recordAssistantMessage} exactly once, guarded
      *   by {@code recorded} (T9 rework 2026-08-27, correctness High-1).

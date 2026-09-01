@@ -189,6 +189,12 @@
                 -Dgroups=eval 오버라이드가 아니라 별도 Maven 프로파일로 분리한다.
                 (chat:AC-35 — 테스트 실행 중 OpenRouter 호출 0건 보호)
 
+                eval-infra 태그(@Tag("eval-infra"), BL-024, document-ingestion:AC-19)도 같은 이유로
+                기본 빌드에서 제외한다 — 별도 태그인 이유: -Peval은 E0가 25문항 평가셋 스윕(judge
+                호출 포함) 목적으로 만든 프로파일이라, 인제스천 하나만 확인하려고 그 프로파일을
+                태우면 불필요한 judge 호출 비용까지 딸려온다. 아래 excludedGroups 표현식은 JUnit
+                Platform 태그 표현식 문법(|는 OR)이다.
+
                 systemPropertyVariables: review 2026-08-25_chat-T2.md High-1 재작업.
                 IntegrationTestBase 상속(→ @ActiveProfiles("test") → application-test.yaml)은
                 opt-in이라 그걸 상속하지 않는 테스트 클래스(예: V1InitSchemaIntegrationTest)는
@@ -223,7 +229,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <excludedGroups>eval</excludedGroups>
+                    <excludedGroups>eval | eval-infra</excludedGroups>
                     <systemPropertyVariables>
                         <spring.ai.openai.base-url>http://127.0.0.1:1</spring.ai.openai.base-url>
                         <spring.ai.openai.api-key>dummy-test-key-do-not-call-openrouter</spring.ai.openai.api-key>
@@ -279,6 +285,29 @@
                                 수정하거나 조건부로 만들지 말 것 — 그 파일은 기본 빌드 전체의
                                 안전장치이며 eval 카드 하나를 위해 약화시키면 안 된다.
                             -->
+                            <systemPropertyVariables combine.self="override"/>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <!--
+            ./mvnw test -Peval-infra : eval-infra 태그 테스트만 실행 (BL-024, document-ingestion:AC-19).
+            eval 프로파일과 별도인 이유는 위 excludedGroups 주석 참고 (judge 호출 비용을 안 태운다).
+            systemPropertyVariables를 비워도(위 eval 프로파일과 동일 이유) config/application.yaml의
+            포이즌은 그대로 남는다. eval-infra 태그 테스트 자신이 @DynamicPropertySource로 그 벽을
+            넘는다(DocumentRealEmbeddingIndexingIntegrationTest 참고).
+        -->
+        <profile>
+            <id>eval-infra</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <excludedGroups combine.self="override"/>
+                            <groups>eval-infra</groups>
                             <systemPropertyVariables combine.self="override"/>
                         </configuration>
                     </plugin>
