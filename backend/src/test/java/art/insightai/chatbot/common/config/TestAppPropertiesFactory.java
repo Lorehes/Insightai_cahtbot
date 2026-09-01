@@ -92,7 +92,7 @@ public final class TestAppPropertiesFactory {
 
         private AppProperties.Auth auth = new AppProperties.Auth(AppProperties.Auth.Mode.NONE);
         private AppProperties.Search search =
-                new AppProperties.Search(AppProperties.Search.Mode.HYBRID, 5, 60, 0.5, 0.5, 20, 20, 0.0);
+                new AppProperties.Search(AppProperties.Search.Mode.HYBRID, 5, 60, 0.5, 0.5, 20, 20, 0.0, 0.0, 0.0);
         private AppProperties.Rerank rerank =
                 new AppProperties.Rerank(false, "cohere/rerank-v3.5", Duration.ofSeconds(5), Duration.ofSeconds(10));
         private AppProperties.Ingest ingest = new AppProperties.Ingest(

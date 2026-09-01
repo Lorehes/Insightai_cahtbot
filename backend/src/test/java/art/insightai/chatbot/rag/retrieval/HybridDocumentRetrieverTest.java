@@ -108,7 +108,7 @@ class HybridDocumentRetrieverTest {
     void neverCallsBm25PortInVectorMode() {
         // given
         AppProperties.Search search =
-                new AppProperties.Search(AppProperties.Search.Mode.VECTOR, 5, 60, 0.5, 0.5, 20, 7, 0.0);
+                new AppProperties.Search(AppProperties.Search.Mode.VECTOR, 5, 60, 0.5, 0.5, 20, 7, 0.0, 0.0, 0.0);
         List<RetrievedChunk> vectorRaw = List.of(chunk("v1", 0.9));
         List<RetrievedChunk> fused = List.of(chunk("v1", 0.5));
         when(vectorSearchPort.search(QUERY, 7)).thenReturn(vectorRaw);
@@ -130,7 +130,7 @@ class HybridDocumentRetrieverTest {
     void queriesBothAxesWithConfiguredTopKAndFusesInHybridMode() {
         // given
         AppProperties.Search search =
-                new AppProperties.Search(AppProperties.Search.Mode.HYBRID, 4, 60, 0.5, 0.5, 11, 9, 0.0);
+                new AppProperties.Search(AppProperties.Search.Mode.HYBRID, 4, 60, 0.5, 0.5, 11, 9, 0.0, 0.0, 0.0);
         List<RetrievedChunk> bm25Raw = List.of(chunk("b1", 3.0));
         List<RetrievedChunk> vectorRaw = List.of(chunk("v1", 0.8));
         List<RetrievedChunk> fused = List.of(chunk("b1", 0.5), chunk("v1", 0.3));
@@ -159,7 +159,7 @@ class HybridDocumentRetrieverTest {
     void fallsBackToFusedTopKWithoutPropagatingWhenRerankThrows() {
         // given
         AppProperties.Search search =
-                new AppProperties.Search(AppProperties.Search.Mode.VECTOR, 2, 60, 0.5, 0.5, 20, 20, 0.0);
+                new AppProperties.Search(AppProperties.Search.Mode.VECTOR, 2, 60, 0.5, 0.5, 20, 20, 0.0, 0.0, 0.0);
         List<RetrievedChunk> vectorRaw = List.of(chunk("v1", 0.9));
         List<RetrievedChunk> fused =
                 List.of(chunk("f1", 0.9), chunk("f2", 0.8), chunk("f3", 0.7));
@@ -183,7 +183,7 @@ class HybridDocumentRetrieverTest {
     void returnsEmptyListWithoutPropagatingWhenVectorAxisThrows() {
         // given
         AppProperties.Search search =
-                new AppProperties.Search(AppProperties.Search.Mode.VECTOR, 5, 60, 0.5, 0.5, 20, 20, 0.0);
+                new AppProperties.Search(AppProperties.Search.Mode.VECTOR, 5, 60, 0.5, 0.5, 20, 20, 0.0, 0.0, 0.0);
         when(vectorSearchPort.search(QUERY, 20)).thenThrow(new RuntimeException("DB connection lost"));
 
         // when
@@ -204,7 +204,7 @@ class HybridDocumentRetrieverTest {
         // given: this pins the coordinator decision documented in HybridDocumentRetriever's own
         // [Caution] -- "either axis fails" collapses to empty, not a partial-axis result
         AppProperties.Search search =
-                new AppProperties.Search(AppProperties.Search.Mode.HYBRID, 5, 60, 0.5, 0.5, 20, 20, 0.0);
+                new AppProperties.Search(AppProperties.Search.Mode.HYBRID, 5, 60, 0.5, 0.5, 20, 20, 0.0, 0.0, 0.0);
         when(bm25SearchPort.search(QUERY, 20)).thenThrow(new RuntimeException("BM25 query failed"));
 
         // when
@@ -226,7 +226,7 @@ class HybridDocumentRetrieverTest {
     void throwsNullPointerExceptionImmediatelyWhenQueryIsNull() {
         // given
         AppProperties.Search search =
-                new AppProperties.Search(AppProperties.Search.Mode.HYBRID, 5, 60, 0.5, 0.5, 20, 20, 0.0);
+                new AppProperties.Search(AppProperties.Search.Mode.HYBRID, 5, 60, 0.5, 0.5, 20, 20, 0.0, 0.0, 0.0);
         HybridDocumentRetriever retriever = retriever(search);
 
         // when / then: NPE surfaces before either try block, not caught as a search-axis failure
@@ -246,7 +246,7 @@ class HybridDocumentRetrieverTest {
         // given: fused has 5 entries, well above topK=2 -- if this class truncated before calling
         // rerankPort, the captured argument below would already be size 2
         AppProperties.Search search =
-                new AppProperties.Search(AppProperties.Search.Mode.VECTOR, 2, 60, 0.5, 0.5, 20, 20, 0.0);
+                new AppProperties.Search(AppProperties.Search.Mode.VECTOR, 2, 60, 0.5, 0.5, 20, 20, 0.0, 0.0, 0.0);
         List<RetrievedChunk> vectorRaw = List.of(chunk("v1", 0.9));
         List<RetrievedChunk> fused = List.of(
                 chunk("f1", 0.9), chunk("f2", 0.8), chunk("f3", 0.7), chunk("f4", 0.6), chunk("f5", 0.5));

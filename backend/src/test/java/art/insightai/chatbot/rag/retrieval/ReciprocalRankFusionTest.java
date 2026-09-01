@@ -27,7 +27,7 @@ class ReciprocalRankFusionTest {
     private static AppProperties appProperties(int rrfK, double weightBm25, double weightVector, double scoreThreshold) {
         return TestAppPropertiesFactory.builder()
                 .search(new AppProperties.Search(
-                        AppProperties.Search.Mode.HYBRID, 5, rrfK, weightBm25, weightVector, 20, 20, scoreThreshold))
+                        AppProperties.Search.Mode.HYBRID, 5, rrfK, weightBm25, weightVector, 20, 20, scoreThreshold, 0.0, 0.0))
                 .build();
     }
 

@@ -49,6 +49,22 @@ public record AppProperties(
      *   drop valid chunks before D7 tunes it. The filter code path exists; only the number is
      *   deferred (hybrid-rag Spec §8-D2). The eval-usage-dashboard Spec's D7 sweep is expected
      *   to determine the real value.
+     * [Caution] {@code scoreThreshold} filters the RRF *fused* score, which is a function of
+     *   rank, not of relevance: with the default {@code rrfK}/weights/topK its whole value
+     *   range is {@code 0.00625..0.01639} (worst case {@code 0.5/(60+20)}, best case
+     *   {@code 0.5/61 + 0.5/61}), and a chunk ranked first on both axes always scores exactly
+     *   {@code 0.0163934...} whatever the query was. Measured on the D7 sweep's stored
+     *   {@code messages.sources}, 9 of 10 questions with no answer in the corpus produced the
+     *   same top-1 fused score as questions that had one, so no value of {@code scoreThreshold}
+     *   separates them: it behaves as a top-k control, never as a relevance filter (BL-025).
+     *   {@code bm25RawScoreThreshold}/{@code vectorRawScoreThreshold} are the filter the plan
+     *   doc's R6 actually intended. They drop a chunk by its axis-native score before fusion,
+     *   which is where R6's observed numbers live (a 1.18-point BM25 row being irrelevant while
+     *   3.99 was the answer, D1 spike 5-c). Two properties rather than one because the axes are
+     *   not on a common scale: BM25 is unbounded and corpus-dependent, cosine similarity is
+     *   bounded. Both default to {@code 0.0} (disabled), so the pipeline is unchanged until D7
+     *   supplies measured numbers, and {@code scoreThreshold} is kept as-is because AC-4 and
+     *   Test Case U2 pin its behavior.
      */
     public record Search(
             @DefaultValue("vector") Mode mode,
@@ -58,8 +74,36 @@ public record AppProperties(
             @DefaultValue("0.5") double weightVector,
             @DefaultValue("20") int bm25TopK,
             @DefaultValue("20") int vectorTopK,
-            @DefaultValue("0.0") double scoreThreshold
+            @DefaultValue("0.0") double scoreThreshold,
+            @DefaultValue("0.0") double bm25RawScoreThreshold,
+            @DefaultValue("0.0") double vectorRawScoreThreshold
     ) {
+        public Search {
+            requireUsableThreshold(scoreThreshold, "app.search.score-threshold");
+            requireUsableThreshold(bm25RawScoreThreshold, "app.search.bm25-raw-score-threshold");
+            requireUsableThreshold(vectorRawScoreThreshold, "app.search.vector-raw-score-threshold");
+        }
+
+        /**
+         * [Purpose] Fails startup on a threshold value that would disable retrieval silently.
+         * [Rationale] {@code NaN} loses every {@code >=} comparison, so a mistyped value would
+         *   drop an entire axis's results with no error anywhere; a negative value silently
+         *   means "disabled" while reading as if it were active. Both are configuration
+         *   mistakes that only surface as missing answers, which is the hardest failure to
+         *   trace back. {@code Models}, {@code Memory} and {@code Ingest} already validate in
+         *   their compact constructors; {@code Search} was the gap (BL-025 review, Low-3).
+         *   These numbers get hand-set during the D7 sweep, which is exactly when a typo is
+         *   most likely, so the check earns its keep before that sweep rather than after.
+         * [Caution] {@code 0.0} is legal and means the filter is off -- do not tighten this to
+         *   a positive-only check.
+         */
+        private static void requireUsableThreshold(double value, String propertyName) {
+            if (Double.isNaN(value) || value < 0.0) {
+                throw new IllegalArgumentException(
+                        propertyName + " must be a non-negative number, but was " + value);
+            }
+        }
+
         public enum Mode { VECTOR, HYBRID }
     }
 

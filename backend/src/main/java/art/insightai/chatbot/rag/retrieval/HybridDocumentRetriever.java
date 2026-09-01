@@ -17,8 +17,9 @@ import art.insightai.chatbot.rag.domain.RetrievedChunk;
  *   {@link RerankPort}, and owns the two failure fallbacks the ports themselves are not
  *   responsible for: a search-axis exception collapses to an empty result (AC-14), and a rerank
  *   exception collapses to the fused order (AC-8).
- * [Rationale] Pipeline order is fixed by Tech Review D-T3: mode branch -&gt; axis search(es) -&gt;
- *   {@link ReciprocalRankFusion#fuse} (fusion + threshold, one pass) -&gt; {@link
+ * [Rationale] Pipeline order is Tech Review D-T3 plus one stage added by BL-025: mode branch
+ *   -&gt; axis search(es) -&gt; per-axis raw-score filter ({@link #dropBelowRawThreshold}) -&gt;
+ *   {@link ReciprocalRankFusion#fuse} (fusion + fused-score threshold, one pass) -&gt; {@link
  *   RerankPort#rerank} (which itself returns at most {@code app.search.top-k} entries, already
  *   in final order per AC-6/AC-7) -&gt; return. This class therefore never truncates a second
  *   time; asking {@link RerankPort#rerank} for {@code topK} directly is what makes "topK cutting
@@ -26,6 +27,11 @@ import art.insightai.chatbot.rag.domain.RetrievedChunk;
  *   mode the BM25 axis is never invoked (AC-1) and {@link ReciprocalRankFusion#fuse} is still
  *   called with {@code List.of()} for the BM25 side (its own Javadoc requires this over {@code
  *   null}) so the single threshold-filter code path (AC-4) runs the same way regardless of mode.
+ *   D-T3's "threshold applies exactly once, right after RRF fusion" still holds literally:
+ *   the fused-score filter is still one pass inside {@link ReciprocalRankFusion#fuse}. What
+ *   BL-025 adds is a different filter, on a different quantity (axis-native scores), at a
+ *   different stage -- because the fused score cannot express relevance at all. That deviation
+ *   is recorded in the hybrid-rag Spec's design-deviation section.
  *   {@link RetrievedChunk#score} on every element this class returns is always the RRF fusion
  *   score (Tech Review D-T6) — this class never rewrites it, and neither collaborator it calls
  *   does either.
@@ -173,11 +179,54 @@ public class HybridDocumentRetriever {
      */
     private List<RetrievedChunk> searchAndFuse(String query) {
         if (searchProperties.mode() == AppProperties.Search.Mode.VECTOR) {
-            List<RetrievedChunk> vectorResults = vectorSearchPort.search(query, searchProperties.vectorTopK());
+            List<RetrievedChunk> vectorResults = dropBelowRawThreshold(
+                    vectorSearchPort.search(query, searchProperties.vectorTopK()),
+                    searchProperties.vectorRawScoreThreshold());
             return reciprocalRankFusion.fuse(List.of(), vectorResults);
         }
-        List<RetrievedChunk> bm25Results = bm25SearchPort.search(query, searchProperties.bm25TopK());
-        List<RetrievedChunk> vectorResults = vectorSearchPort.search(query, searchProperties.vectorTopK());
+        List<RetrievedChunk> bm25Results = dropBelowRawThreshold(
+                bm25SearchPort.search(query, searchProperties.bm25TopK()),
+                searchProperties.bm25RawScoreThreshold());
+        List<RetrievedChunk> vectorResults = dropBelowRawThreshold(
+                vectorSearchPort.search(query, searchProperties.vectorTopK()),
+                searchProperties.vectorRawScoreThreshold());
         return reciprocalRankFusion.fuse(bm25Results, vectorResults);
+    }
+
+    /**
+     * [Purpose] Drops chunks whose axis-native score is below that axis's raw threshold, before
+     *   {@link ReciprocalRankFusion} turns scores into rank contributions (BL-025).
+     * [Rationale] {@code app.search.score-threshold} filters the fused RRF score, and that score
+     *   is a function of rank alone: a chunk ranked first on both axes scores exactly
+     *   {@code 0.5/61 + 0.5/61} no matter how relevant it is, so that filter can only decide how
+     *   many ranks pass, never how relevant a chunk is. Measured on the D7 sweep's stored
+     *   {@code messages.sources}, 9 of 10 questions with no answer in the corpus produced the
+     *   same top-1 fused score as questions that had one. Relevance information survives only in
+     *   the axis-native scores (BM25 term score, cosine similarity), which fusion discards by
+     *   design (Tech Review D-T6), so the only place a relevance filter can work is here, ahead
+     *   of it. This is what the plan doc's R6 meant by a score threshold: its evidence is a
+     *   1.18-point BM25 row that was irrelevant while 3.99 was the answer (D1 spike 5-c).
+     * [Caution] Each axis needs its own threshold because the two are not on a common scale:
+     *   BM25 scores are unbounded and corpus-dependent, cosine similarity is bounded. A
+     *   threshold of {@code 0.0} disables the filter for that axis and returns the list
+     *   untouched, which is the default until D7 measures real values; that identity return also
+     *   keeps the empty-axis contract ({@code List.of()} for an axis that did not run) intact.
+     *   Filtering happens before fusion on purpose: {@link ReciprocalRankFusion} derives rank
+     *   from list position, so a dropped chunk must not occupy a rank slot and push a surviving
+     *   chunk down. The comparison is {@code >=}, matching the existing threshold's boundary
+     *   behavior (Spec Test Case U2). This does not replace {@code app.search.score-threshold}:
+     *   that filter still runs exactly once inside {@link ReciprocalRankFusion#fuse} (AC-4), and
+     *   both default to disabled.
+     */
+    private static List<RetrievedChunk> dropBelowRawThreshold(
+            List<RetrievedChunk> axisResults,
+            double rawScoreThreshold
+    ) {
+        if (rawScoreThreshold <= 0.0) {
+            return axisResults;
+        }
+        return axisResults.stream()
+                .filter(chunk -> chunk.score() >= rawScoreThreshold)
+                .toList();
     }
 }
