@@ -140,6 +140,7 @@ D7 평가셋(문서에 있는 질문 15 + 없는 질문 5)이 그대로 증거 �
 | `rag` | 인제스천·검색·리랭크 |
 | `user` | 익명 세션·사용자 |
 | `usage` | 토큰·비용 집계 |
+| `eval` | 평가셋·판정기·품질 지표·스윕 |
 | `common` | 설정·필터·공통 웹 |
 | `infra` | docker-compose, nginx, 환경변수 |
 | `frontend` | Next.js |
