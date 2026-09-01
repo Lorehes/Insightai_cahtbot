@@ -341,9 +341,13 @@ public class ChatService {
      *   test suite; no AC or defense for it exists yet.
      * [Caution] <b>Overload rationale (BL-024, 2026-09-01):</b> {@code eval-usage-dashboard:AC-20b}'s positive control needs a real (non-stub)
      *   OpenRouter call that actually returns {@code finish_reason=length}, through this exact
-     *   production path (RAG advisor attachment, persistence, {@link
-     *   ChatChunk#normalizeFinishReason}) rather than a hand-rolled call elsewhere — BL-024,
-     *   2026-09-01 user approval. This is an overload, not a default parameter (Java has none), so
+     *   production path (persistence, {@link ChatChunk#normalizeFinishReason}) rather than a
+     *   hand-rolled call elsewhere — BL-024, 2026-09-01 user approval. <b>Correction (review round
+     *   1, correctness Low-1):</b> this paragraph previously also named "RAG advisor attachment" as
+     *   part of that exact path, but {@code EvalSweepIntegrationTest.PositiveControls} runs with
+     *   {@code ragEnabled=false} (the control targets output-length truncation, not retrieval) —
+     *   RAG attachment is not exercised by that control and was never required for it to be valid.
+     *   This is an overload, not a default parameter (Java has none), so
      *   the pre-existing 3-arg method above (~11 call sites: {@code ConversationController} plus
      *   test fixtures) recompiles unchanged and keeps passing {@code null} here, which sets no
      *   {@code maxTokens} at all — byte-for-byte the same {@link OpenAiChatOptions} this method
