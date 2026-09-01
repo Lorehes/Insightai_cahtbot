@@ -191,14 +191,18 @@ app:
     # (CLAUDE.md 금지 P1, docs/dev-log/backend.jsonl 이 카드의 note 참고). 전부 유료 모델이라
     # ':free' 접미사가 없다(CLAUDE.md 금지 P2) -- AppProperties.Models 컴팩트 생성자가 기동 시
     # 재검증한다.
+    # 2026-09-01: openai/gpt-5-mini 를 openai/gpt-5.6-luna 로 교체 (5개 정원이라 사용자가 gpt-5-mini
+    # 를 지목해 뺐다). 신규 id 도 동일 방식(curl + GET https://openrouter.ai/api/v1/models 원본
+    # JSON grep)으로 실재를 확인했다 -- WebFetch 툴의 AI 요약 경로는 대형 카탈로그에서 신뢰할 수
+    # 없는 결과(이미 있던 gpt-5-mini 조차 "없음"으로 오답)를 냈으므로 원본 JSON 직접 조회로 대체했다.
     default-id: ${CHAT_MODEL_DEFAULT}
     items:
       - id: upstage/solar-pro4
         display-name: Solar Pro 4 (Upstage)
       - id: google/gemini-2.5-flash-lite
         display-name: Gemini 2.5 Flash-Lite (Google)
-      - id: openai/gpt-5-mini
-        display-name: GPT-5 mini (OpenAI)
+      - id: openai/gpt-5.6-luna
+        display-name: GPT-5.6 Luna (OpenAI)
       - id: google/gemini-2.5-flash
         display-name: Gemini 2.5 Flash (Google)
       - id: anthropic/claude-haiku-4.5
