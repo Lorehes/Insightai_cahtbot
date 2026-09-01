@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -80,6 +81,38 @@ class AnonymousSessionFilterTest {
         //   session, even on this path
         verify(anonymousUserService).resolveOrCreate(existingUserId.toString());
         verify(response).addHeader(eq("Set-Cookie"), contains(existingUserId.toString()));
+    }
+
+    @Test
+    @DisplayName("(무태그 -- BL-001 회귀 가드) 모든 /api/* 응답에 보안 헤더 4종(CSP·X-Frame-Options·Referrer-Policy·"
+            + "X-Content-Type-Options)이 실리며, 세션 없는 GET /api/models 우회 경로와 503 경로에서도 빠지지 않는다")
+    void stampsSecurityHeadersOnEveryPath() throws Exception {
+        // given: three paths -- normal issue, the cookie-less /api/models bypass, and the 503 branch
+        AnonymousSessionFilter filter = new AnonymousSessionFilter(anonymousUserService);
+
+        when(request.getCookies()).thenReturn(null);
+        when(request.getRequestURI()).thenReturn("/api/conversations");
+        when(anonymousUserService.resolveOrCreate(null)).thenReturn(UUID.randomUUID());
+        filter.doFilterInternal(request, response, filterChain);
+
+        HttpServletResponse modelsResponse = mock(HttpServletResponse.class);
+        when(request.getRequestURI()).thenReturn("/api/models");
+        filter.doFilterInternal(request, modelsResponse, filterChain);
+
+        HttpServletResponse quotaResponse = mock(HttpServletResponse.class);
+        when(request.getRequestURI()).thenReturn("/api/conversations");
+        when(anonymousUserService.resolveOrCreate(null)).thenThrow(new AnonymousUserQuotaExceededException(1000));
+        filter.doFilterInternal(request, quotaResponse, filterChain);
+
+        // then: literal values (not the production constant map) so a silent edit of one value fails here
+        for (HttpServletResponse r : new HttpServletResponse[] {response, modelsResponse, quotaResponse}) {
+            verify(r).setHeader(eq("Content-Security-Policy"), contains("default-src 'none'"));
+            verify(r).setHeader(eq("Content-Security-Policy"), contains("frame-ancestors 'none'"));
+            verify(r).setHeader(eq("X-Frame-Options"), eq("DENY"));
+            verify(r).setHeader(eq("Referrer-Policy"), eq("strict-origin-when-cross-origin"));
+            verify(r).setHeader(eq("X-Content-Type-Options"), eq("nosniff"));
+        }
+        assertThat(AnonymousSessionFilter.SECURITY_HEADERS).hasSize(4);
     }
 
     @Test

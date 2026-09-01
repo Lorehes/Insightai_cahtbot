@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -75,6 +76,28 @@ public class AnonymousSessionFilter extends OncePerRequestFilter {
      */
     private static final String QUOTA_EXCEEDED_CLIENT_MESSAGE = "server busy, please try again later";
 
+    /**
+     * [Purpose] The four security response headers every {@code /api/*} response carries (BL-001,
+     *   2026-09-01). Origin-side defense: the Next.js {@code headers()} config attaches the same
+     *   four to every page it serves itself, but Next does not run that config against a response it
+     *   merely forwards through {@code rewrites()} -- so the proxied API path families (exactly the
+     *   ones carrying LLM/RAG-derived untrusted content) shipped with none of them (measured with
+     *   {@code curl -D} in review 2026-08-29_chat-F1-F3-round3.md Medium-1). Stamping them here also
+     *   protects a caller that bypasses the proxy and hits port 8080 directly.
+     * [Rationale] {@code default-src 'none'} is the standard CSP for a response that is never
+     *   rendered as a document (JSON / SSE); it makes any browser that does render one (e.g. a
+     *   direct navigation to {@code /api/models}) run no script, load no subresource and allow no
+     *   framing. {@code X-Frame-Options}/{@code Referrer-Policy}/{@code X-Content-Type-Options}
+     *   values mirror {@code frontend/next.config.ts} {@code SECURITY_HEADERS} so the two edges
+     *   never disagree. Set with {@code setHeader} (not {@code addHeader}) so a duplicate can never
+     *   appear if a later layer stamps the same name.
+     */
+    static final Map<String, String> SECURITY_HEADERS = Map.of(
+            "Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+            "X-Frame-Options", "DENY",
+            "Referrer-Policy", "strict-origin-when-cross-origin",
+            "X-Content-Type-Options", "nosniff");
+
     private final AnonymousUserService anonymousUserService;
 
     public AnonymousSessionFilter(AnonymousUserService anonymousUserService) {
@@ -87,6 +110,9 @@ public class AnonymousSessionFilter extends OncePerRequestFilter {
         // T4 review round 2, Low: neither the browser nor an intermediary should cache a
         // session-bearing response, success or 503 alike.
         response.addHeader("Cache-Control", "no-store");
+        // BL-001: stamped before any branch below (models bypass, 503, normal), so every /api/*
+        // response -- including the ones the Next.js proxy forwards untouched -- carries them.
+        SECURITY_HEADERS.forEach(response::setHeader);
         String cookieValue = readCookie(request);
         if (cookieValue == null && SESSION_EXEMPT_PATH.equals(request.getRequestURI())) {
             // T5 review round 1, Medium-1: no cookie and no session need on this path -- skip
