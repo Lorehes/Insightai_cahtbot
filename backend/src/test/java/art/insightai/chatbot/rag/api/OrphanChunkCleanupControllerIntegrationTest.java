@@ -17,8 +17,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 import art.insightai.chatbot.rag.ingest.ChunkRepository;
+import art.insightai.chatbot.support.AnonymousUserCleanup;
 import art.insightai.chatbot.support.ChunkSeeder;
 import art.insightai.chatbot.support.IntegrationTestBase;
 
@@ -79,9 +81,17 @@ class OrphanChunkCleanupControllerIntegrationTest extends IntegrationTestBase {
 
     private final List<UUID> insertedDocumentIds = new ArrayList<>();
 
+    /**
+     * [Purpose] Tracks the {@code chatbot_sid} id {@code AnonymousSessionFilter} minted for this
+     *   class's own {@code MockMvc} request -- see {@code AnonymousUserCleanup}'s own Javadoc
+     *   (BL-034).
+     */
+    private AnonymousUserCleanup anonymousUserCleanup;
+
     @BeforeEach
     void createChunkSeeder() {
         chunkSeeder = new ChunkSeeder(jdbcTemplate);
+        anonymousUserCleanup = new AnonymousUserCleanup(jdbcTemplate);
     }
 
     @AfterEach
@@ -91,6 +101,7 @@ class OrphanChunkCleanupControllerIntegrationTest extends IntegrationTestBase {
             jdbcTemplate.update("DELETE FROM documents WHERE id = ?", documentId);
         }
         insertedDocumentIds.clear();
+        anonymousUserCleanup.cleanUp();
     }
 
     @Test
@@ -123,9 +134,11 @@ class OrphanChunkCleanupControllerIntegrationTest extends IntegrationTestBase {
                 .isGreaterThanOrEqualTo(3L);
 
         // when
-        mockMvc.perform(post("/api/admin/documents/orphan-chunks/cleanup"))
+        MvcResult result = mockMvc.perform(post("/api/admin/documents/orphan-chunks/cleanup"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.deletedCount").value((int) expectedDeletedCount));
+                .andExpect(jsonPath("$.deletedCount").value((int) expectedDeletedCount))
+                .andReturn();
+        anonymousUserCleanup.track(result);
 
         // then: the endpoint's own predicate is now satisfied by nothing at all -- not merely "our
         // 3 rows are gone", which a partial sweep could also achieve

@@ -5,11 +5,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import art.insightai.chatbot.rag.ingest.ChunkRepository;
+import art.insightai.chatbot.support.AnonymousUserCleanup;
 import art.insightai.chatbot.support.DocumentRowCounter;
 import art.insightai.chatbot.support.IntegrationTestBase;
 import com.jayway.jsonpath.JsonPath;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -140,6 +142,18 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
     private final List<UUID> insertedDocumentIds = new ArrayList<>();
 
     /**
+     * [Purpose] Tracks the {@code chatbot_sid} ids {@code AnonymousSessionFilter} minted for this
+     *   class's own {@code MockMvc} requests -- see {@code AnonymousUserCleanup}'s own Javadoc
+     *   (BL-034).
+     */
+    private AnonymousUserCleanup anonymousUserCleanup;
+
+    @BeforeEach
+    void createAnonymousUserCleanup() {
+        anonymousUserCleanup = new AnonymousUserCleanup(jdbcTemplate);
+    }
+
+    /**
      * [Purpose] Removes the row, chunks and upload file of every document this class created --
      *   after waiting for the background ingestion T8 now starts for each of them to finish.
      * [Rationale] Without the wait this cleanup races the {@code ingestExecutor} worker: deleting
@@ -161,6 +175,7 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
             deleteOrThrow(uploadedFilePath(documentId));
         }
         insertedDocumentIds.clear();
+        anonymousUserCleanup.cleanUp();
     }
 
     @Test
@@ -177,6 +192,7 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
         MvcResult result = mockMvc.perform(multipart("/api/admin/documents").file(file))
                 .andExpect(status().isAccepted())
                 .andReturn();
+        anonymousUserCleanup.track(result);
 
         // then: response shape (AC-1)
         String responseBody = result.getResponse().getContentAsString();
@@ -224,6 +240,7 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
         MvcResult result = mockMvc.perform(multipart("/api/admin/documents").file(file))
                 .andExpect(status().isBadRequest())
                 .andReturn();
+        anonymousUserCleanup.track(result);
 
         // then: no row, no file
         assertThat(DocumentRowCounter.countDocuments(jdbcTemplate)).isEqualTo(documentsBefore);
@@ -265,6 +282,7 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
         MvcResult result = mockMvc.perform(multipart("/api/admin/documents").file(file))
                 .andExpect(status().isBadRequest())
                 .andReturn();
+        anonymousUserCleanup.track(result);
 
         // then: fixed detail, mimeType present, capped at 128, and a real prefix of the original
         // -- no assertion on the exact truncated content or cut position beyond that
@@ -298,6 +316,7 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
         MvcResult result = mockMvc.perform(multipart("/api/admin/documents").file(file))
                 .andExpect(status().isBadRequest())
                 .andReturn();
+        anonymousUserCleanup.track(result);
 
         // then
         assertThat(DocumentRowCounter.countDocuments(jdbcTemplate)).isEqualTo(documentsBefore);
@@ -328,8 +347,10 @@ class DocumentUploadControllerIntegrationTest extends IntegrationTestBase {
         MockMultipartFile file = new MockMultipartFile("file", "large.txt", "text/plain", oversizedContent);
 
         // when
-        mockMvc.perform(multipart("/api/admin/documents").file(file))
-                .andExpect(status().isPayloadTooLarge());
+        MvcResult result = mockMvc.perform(multipart("/api/admin/documents").file(file))
+                .andExpect(status().isPayloadTooLarge())
+                .andReturn();
+        anonymousUserCleanup.track(result);
 
         // then
         assertThat(DocumentRowCounter.countDocuments(jdbcTemplate)).isEqualTo(documentsBefore);

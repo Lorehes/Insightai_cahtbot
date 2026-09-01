@@ -6,11 +6,13 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import art.insightai.chatbot.rag.ingest.DocumentUploadService;
+import art.insightai.chatbot.support.AnonymousUserCleanup;
 import art.insightai.chatbot.support.DocumentRowCounter;
 import art.insightai.chatbot.support.IntegrationTestBase;
 import com.jayway.jsonpath.JsonPath;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -127,6 +129,26 @@ class DocumentUploadContainerSizeLimitIntegrationTest extends IntegrationTestBas
     @MockitoSpyBean
     private DocumentUploadService documentUploadService;
 
+    /**
+     * [Purpose] Tracks the {@code chatbot_sid} ids {@code AnonymousSessionFilter} minted for this
+     *   class's own requests -- see {@code AnonymousUserCleanup}'s own Javadoc (BL-034). This class
+     *   drives the endpoint over a real socket via {@link RestClient} rather than {@code MockMvc},
+     *   so both call sites use {@link AnonymousUserCleanup#trackFromSetCookieHeaders} (raw
+     *   {@code Set-Cookie} response header values) instead of the {@code MvcResult}-based {@link
+     *   AnonymousUserCleanup#track} overload.
+     */
+    private AnonymousUserCleanup anonymousUserCleanup;
+
+    @BeforeEach
+    void createAnonymousUserCleanup() {
+        anonymousUserCleanup = new AnonymousUserCleanup(jdbcTemplate);
+    }
+
+    @AfterEach
+    void cleanUpAnonymousUsers() {
+        anonymousUserCleanup.cleanUp();
+    }
+
     @AfterEach
     void cleanUpUploadDir() throws IOException {
         // Defensive only -- the request under test is expected to leave no file behind; this
@@ -167,6 +189,10 @@ class DocumentUploadContainerSizeLimitIntegrationTest extends IntegrationTestBas
         // then: rejected with 413, and the fixed body this handler is supposed to return
         assertThat(thrown).as("expected the container multipart limit to reject this request with a 4xx")
                 .isNotNull();
+        // AnonymousSessionFilter runs ahead of DispatcherServlet's multipart resolution, so it
+        // still minted a users row for this request even though the container rejected it (BL-034)
+        anonymousUserCleanup.trackFromSetCookieHeaders(
+                thrown.getResponseHeaders() == null ? null : thrown.getResponseHeaders().get("Set-Cookie"));
         assertThat(thrown.getStatusCode().value()).isEqualTo(413);
         String detail = JsonPath.read(thrown.getResponseBodyAsString(), "$.detail");
         assertThat(detail).isEqualTo(DOCUMENT_TOO_LARGE_CLIENT_MESSAGE);
@@ -217,6 +243,7 @@ class DocumentUploadContainerSizeLimitIntegrationTest extends IntegrationTestBas
 
             // then: accepted, and the spy actually observed the real request
             assertThat(response.getStatusCode().value()).isEqualTo(202);
+            anonymousUserCleanup.trackFromSetCookieHeaders(response.getHeaders().get("Set-Cookie"));
             documentId = UUID.fromString(JsonPath.read(response.getBody(), "$.id"));
             assertThat(DocumentRowCounter.countDocuments(jdbcTemplate)).isEqualTo(documentsBefore + 1);
             verify(documentUploadService).upload(any());

@@ -4,9 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import art.insightai.chatbot.support.AnonymousUserCleanup;
 import art.insightai.chatbot.support.DocumentRowCounter;
 import art.insightai.chatbot.support.IntegrationTestBase;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -18,6 +21,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -73,6 +77,23 @@ class DocumentUploadQuotaIntegrationTest extends IntegrationTestBase {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    /**
+     * [Purpose] Tracks the {@code chatbot_sid} id {@code AnonymousSessionFilter} minted for this
+     *   class's own {@code MockMvc} request -- see {@code AnonymousUserCleanup}'s own Javadoc
+     *   (BL-034).
+     */
+    private AnonymousUserCleanup anonymousUserCleanup;
+
+    @BeforeEach
+    void createAnonymousUserCleanup() {
+        anonymousUserCleanup = new AnonymousUserCleanup(jdbcTemplate);
+    }
+
+    @AfterEach
+    void cleanUpAnonymousUsers() {
+        anonymousUserCleanup.cleanUp();
+    }
+
     @Test
     @DisplayName("[document-ingestion:AC-15] max-document-count 상한(0으로 고정) 도달 상태에서 허용 MIME 파일을 업로드하면 "
             + "403을 반환하고 documents 행도 upload-dir 파일도 늘지 않는다")
@@ -86,8 +107,10 @@ class DocumentUploadQuotaIntegrationTest extends IntegrationTestBase {
         MockMultipartFile file = new MockMultipartFile("file", "notes.txt", "text/plain", ALLOWED_CONTENT);
 
         // when
-        mockMvc.perform(multipart("/api/admin/documents").file(file))
-                .andExpect(status().isForbidden());
+        MvcResult result = mockMvc.perform(multipart("/api/admin/documents").file(file))
+                .andExpect(status().isForbidden())
+                .andReturn();
+        anonymousUserCleanup.track(result);
 
         // then: no row, no file
         assertThat(DocumentRowCounter.countDocuments(jdbcTemplate)).isEqualTo(documentsBefore);

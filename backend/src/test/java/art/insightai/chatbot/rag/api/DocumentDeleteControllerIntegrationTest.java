@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import art.insightai.chatbot.rag.ingest.ChunkRepository;
 import art.insightai.chatbot.rag.ingest.DocumentIngestLockRegistry;
+import art.insightai.chatbot.support.AnonymousUserCleanup;
 import art.insightai.chatbot.support.ChunkSeeder;
 import art.insightai.chatbot.support.DocumentRowCounter;
 import art.insightai.chatbot.support.IntegrationTestBase;
@@ -21,6 +22,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -124,9 +126,17 @@ class DocumentDeleteControllerIntegrationTest extends IntegrationTestBase {
 
     private final List<UUID> insertedDocumentIds = new ArrayList<>();
 
+    /**
+     * [Purpose] Tracks the {@code chatbot_sid} ids {@code AnonymousSessionFilter} minted for this
+     *   class's own {@code MockMvc} requests -- see {@code AnonymousUserCleanup}'s own Javadoc
+     *   (BL-034).
+     */
+    private AnonymousUserCleanup anonymousUserCleanup;
+
     @BeforeEach
     void createChunkSeeder() {
         chunkSeeder = new ChunkSeeder(jdbcTemplate);
+        anonymousUserCleanup = new AnonymousUserCleanup(jdbcTemplate);
     }
 
     @AfterEach
@@ -137,6 +147,7 @@ class DocumentDeleteControllerIntegrationTest extends IntegrationTestBase {
             deleteQuietly(uploadedFilePath(documentId));
         }
         insertedDocumentIds.clear();
+        anonymousUserCleanup.cleanUp();
     }
 
     @Test
@@ -157,8 +168,10 @@ class DocumentDeleteControllerIntegrationTest extends IntegrationTestBase {
         assertThat(originalFile).exists();
 
         // when
-        mockMvc.perform(delete("/api/admin/documents/{id}", documentId))
-                .andExpect(status().isNoContent());
+        MvcResult result = mockMvc.perform(delete("/api/admin/documents/{id}", documentId))
+                .andExpect(status().isNoContent())
+                .andReturn();
+        anonymousUserCleanup.track(result);
 
         // then: three individually-checked absences -- the row...
         List<Integer> remainingRows = jdbcTemplate.queryForList(
@@ -187,8 +200,10 @@ class DocumentDeleteControllerIntegrationTest extends IntegrationTestBase {
         Files.write(otherFile, ORIGINAL_FILE_CONTENT);
 
         // when
-        mockMvc.perform(delete("/api/admin/documents/{id}", unknownId))
-                .andExpect(status().isNotFound());
+        MvcResult result = mockMvc.perform(delete("/api/admin/documents/{id}", unknownId))
+                .andExpect(status().isNotFound())
+                .andReturn();
+        anonymousUserCleanup.track(result);
 
         // then: the unrelated document's row, chunk and file are all still present
         assertThat(jdbcTemplate.queryForList("SELECT 1 FROM documents WHERE id = ?", Integer.class, otherId))
@@ -219,8 +234,10 @@ class DocumentDeleteControllerIntegrationTest extends IntegrationTestBase {
         Files.write(otherFile, ORIGINAL_FILE_CONTENT);
 
         // when
-        mockMvc.perform(delete("/api/admin/documents/{id}", targetId))
-                .andExpect(status().isNoContent());
+        MvcResult result = mockMvc.perform(delete("/api/admin/documents/{id}", targetId))
+                .andExpect(status().isNoContent())
+                .andReturn();
+        anonymousUserCleanup.track(result);
 
         // then: the target document is gone (row, chunks, file)
         assertThat(jdbcTemplate.queryForList("SELECT 1 FROM documents WHERE id = ?", Integer.class, targetId))
@@ -250,8 +267,10 @@ class DocumentDeleteControllerIntegrationTest extends IntegrationTestBase {
 
         // when
         for (int i = 0; i < 200; i++) {
-            mockMvc.perform(delete("/api/admin/documents/{id}", UUID.randomUUID()))
-                    .andExpect(status().isNotFound());
+            MvcResult result = mockMvc.perform(delete("/api/admin/documents/{id}", UUID.randomUUID()))
+                    .andExpect(status().isNotFound())
+                    .andReturn();
+            anonymousUserCleanup.track(result);
         }
 
         // then: same length as before -- allocation happened exactly once, at bean construction,
@@ -293,8 +312,10 @@ class DocumentDeleteControllerIntegrationTest extends IntegrationTestBase {
             // overrideDeleteLockTimeout) cannot acquire the same id's stripe while the background
             // thread still holds it, so GlobalExceptionHandler maps the resulting
             // DocumentDeleteLockTimeoutException to 503
-            mockMvc.perform(delete("/api/admin/documents/{id}", documentId))
-                    .andExpect(status().isServiceUnavailable());
+            MvcResult result = mockMvc.perform(delete("/api/admin/documents/{id}", documentId))
+                    .andExpect(status().isServiceUnavailable())
+                    .andReturn();
+            anonymousUserCleanup.track(result);
         } finally {
             releaseHolder.countDown();
             holder.join(TimeUnit.SECONDS.toMillis(10));

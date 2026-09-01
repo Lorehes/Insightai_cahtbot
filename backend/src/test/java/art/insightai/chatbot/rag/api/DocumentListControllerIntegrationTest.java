@@ -4,10 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import art.insightai.chatbot.support.AnonymousUserCleanup;
 import art.insightai.chatbot.support.IntegrationTestBase;
 import com.jayway.jsonpath.JsonPath;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -73,12 +75,25 @@ class DocumentListControllerIntegrationTest extends IntegrationTestBase {
 
     private final List<UUID> insertedDocumentIds = new ArrayList<>();
 
+    /**
+     * [Purpose] Tracks the {@code chatbot_sid} ids {@code AnonymousSessionFilter} minted for this
+     *   class's own {@code MockMvc} requests -- see {@code AnonymousUserCleanup}'s own Javadoc
+     *   (BL-034).
+     */
+    private AnonymousUserCleanup anonymousUserCleanup;
+
+    @BeforeEach
+    void createAnonymousUserCleanup() {
+        anonymousUserCleanup = new AnonymousUserCleanup(jdbcTemplate);
+    }
+
     @AfterEach
     void cleanUpInsertedRows() {
         for (UUID documentId : insertedDocumentIds) {
             jdbcTemplate.update("DELETE FROM documents WHERE id = ?", documentId);
         }
         insertedDocumentIds.clear();
+        anonymousUserCleanup.cleanUp();
     }
 
     @Test
@@ -101,6 +116,7 @@ class DocumentListControllerIntegrationTest extends IntegrationTestBase {
         MvcResult result = mockMvc.perform(get("/api/admin/documents"))
                 .andExpect(status().isOk())
                 .andReturn();
+        anonymousUserCleanup.track(result);
 
         // then: exactly one entry for this id, with every field matching what was inserted
         Map<String, Object> entry = findEntry(result, documentId);
@@ -131,6 +147,7 @@ class DocumentListControllerIntegrationTest extends IntegrationTestBase {
         MvcResult result = mockMvc.perform(get("/api/admin/documents"))
                 .andExpect(status().isOk())
                 .andReturn();
+        anonymousUserCleanup.track(result);
 
         // then
         Map<String, Object> entry = findEntry(result, documentId);
@@ -166,6 +183,7 @@ class DocumentListControllerIntegrationTest extends IntegrationTestBase {
         MvcResult result = mockMvc.perform(get("/api/admin/documents"))
                 .andExpect(status().isOk())
                 .andReturn();
+        anonymousUserCleanup.track(result);
 
         // then: filtered to this test's own three ids, in the order they appear in the response --
         // filtering preserves relative order under a globally-created_at-desc-sorted list, so a
