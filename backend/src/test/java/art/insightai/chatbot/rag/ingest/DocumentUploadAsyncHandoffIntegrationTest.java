@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -40,6 +41,7 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import com.jayway.jsonpath.JsonPath;
 
+import art.insightai.chatbot.support.AnonymousUserCleanup;
 import art.insightai.chatbot.support.IntegrationTestBase;
 
 /**
@@ -157,6 +159,40 @@ class DocumentUploadAsyncHandoffIntegrationTest extends IntegrationTestBase {
 
     private final List<UUID> insertedDocumentIds = new ArrayList<>();
 
+    /**
+     * [Purpose] Deletes the anonymous {@code users} rows this class's own uploads create, so a
+     *   local dev database does not accumulate them run after run (BL-039).
+     * [Rationale] {@code SessionFilterConfig} registers the anonymous-session filter on
+     *   {@code /api/*}, so every cookie-less {@code MockMvc} upload here mints a new user row,
+     *   while {@link #cleanUpInsertedRows()} only removes documents, chunks and the stored file.
+     *   Measured before this was added: 716 -&gt; 718 for this class's two tests, matching its two
+     *   uploads exactly. BL-034 fixed the same leak in six {@code rag/api} classes but scoped
+     *   itself by domain package, which is why this class -- the only other direct subclass that
+     *   actually leaks -- was missed; the leak follows &quot;does it go over HTTP&quot;, not the
+     *   package it lives in.
+     * [Caution] A fresh instance per test (not a field initializer) because
+     *   {@link AnonymousUserCleanup} accumulates tracked ids and is not reusable across tests.
+     */
+    private AnonymousUserCleanup anonymousUserCleanup;
+
+    @BeforeEach
+    void createAnonymousUserCleanup() {
+        anonymousUserCleanup = new AnonymousUserCleanup(jdbcTemplate);
+    }
+
+    /**
+     * [Purpose] Removes the tracked anonymous users in its own hook.
+     * [Rationale] Deliberately separate from {@link #cleanUpInsertedRows()} rather than appended
+     *   to it: if the document/chunk/file cleanup throws, a shared hook would skip the user
+     *   cleanup and leak anyway. {@code DocumentUploadContainerSizeLimitIntegrationTest} already
+     *   uses this split, and BL-034's round-2 review recommended the remaining classes match it.
+     *   The two hooks are order-independent -- {@code documents} does not reference {@code users}.
+     */
+    @AfterEach
+    void cleanUpAnonymousUsers() {
+        anonymousUserCleanup.cleanUp();
+    }
+
     @AfterEach
     void cleanUpInsertedRows() {
         for (UUID documentId : insertedDocumentIds) {
@@ -211,6 +247,7 @@ class DocumentUploadAsyncHandoffIntegrationTest extends IntegrationTestBase {
             MvcResult result = mockMvc.perform(multipart("/api/admin/documents").file(file))
                     .andExpect(status().isAccepted())
                     .andReturn();
+            anonymousUserCleanup.track(result);
 
             // then: the 202 body is the PENDING handoff acknowledgement
             String responseBody = result.getResponse().getContentAsString();
@@ -287,6 +324,7 @@ class DocumentUploadAsyncHandoffIntegrationTest extends IntegrationTestBase {
             MvcResult result = mockMvc.perform(multipart("/api/admin/documents").file(file))
                     .andExpect(status().isAccepted())
                     .andReturn();
+            anonymousUserCleanup.track(result);
             String responseBody = result.getResponse().getContentAsString();
             assertThat((String) JsonPath.read(responseBody, "$.status")).isEqualTo("PENDING");
             documentId = UUID.fromString(JsonPath.read(responseBody, "$.id"));
