@@ -29,8 +29,10 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  *   a brand-new session issuance is rejected once the ceiling is reached, while replaying an
  *   already-existing cookie keeps working regardless of it (review qa-tester assignment).
  * [Rationale] The ceiling is pinned to {@code 0} via a class-level {@link TestPropertySource}
- *   (its own Spring context, separate from {@code SessionControllerIntegrationTest}'s default
- *   1000) so "any brand-new issuance is over the limit" holds deterministically without first
+ *   (its own Spring context, separate from {@code SessionControllerIntegrationTest}'s own pin at
+ *   {@code 100000} -- neither runs at the production default of 1000; {@code IntegrationTestBase}
+ *   itself now pins 100000 too, BL-027, 2026-09-01, but this class's own {@code
+ *   @TestPropertySource} still wins) so "any brand-new issuance is over the limit" holds deterministically without first
  *   padding the {@code users} table up to a real threshold. Under that ceiling, {@code
  *   GET /api/session} without a cookie can never itself produce a pre-existing anonymous row to
  *   reuse -- that request IS the rejected path -- so the row used by the reuse test is seeded
