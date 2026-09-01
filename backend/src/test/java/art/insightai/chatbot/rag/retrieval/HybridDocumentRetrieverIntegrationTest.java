@@ -7,7 +7,6 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,15 +47,16 @@ import art.insightai.chatbot.support.StubEmbeddingModel;
  *   card brief: if this test fails, that failure is reported as-is (not forced to pass by hand-
  *   tuning weights/rrfK, which is a D7/coordinator decision, not this card's) -- see the dev-log
  *   entry and final report for this card's actual observed result.
- * [Caution] {@link #rankExactMatchFirstForProductCodeQuery} is {@code @Disabled} as of the
- *   dev-qa-tester QA pass on this card (2026-08-28): run against the live container it FAILS at
- *   the default weights (rrfK=60, weight 0.5/0.5) -- both chunks land on the exact same RRF score
- *   (0.5/61 + 0.5/62) and the tie-break rule (BM25-accumulated-first) hands rank 1 to the
- *   competitor chunk, not the exact match. This is §8 R-F materializing, not a bug in this class
- *   or in {@link ReciprocalRankFusion}. AC-13's final closure is now {@code
- *   eval-usage-dashboard} Spec's T1 (weight/rrfK values fixed from the D7 eval set) -- see hybrid-
- *   rag Spec Tech Review "AC-13 소유권 재정정 (2026-08-28)". Do not re-enable this test by hand-
- *   tuning weights here; that decision belongs to T1, not this file.
+ * [Caution] {@link #rankExactMatchFirstForProductCodeQuery} was {@code @Disabled} from the
+ *   dev-qa-tester QA pass on this card (2026-08-28) until eval-usage-dashboard:T1 (2026-09-01):
+ *   at the original weights (rrfK=60, weight 0.5/0.5) both chunks landed on the exact same RRF
+ *   score (0.5/61 + 0.5/62) and the tie-break rule (BM25-accumulated-first) handed rank 1 to the
+ *   competitor chunk -- §8 R-F materializing, not a bug in this class or in {@link
+ *   ReciprocalRankFusion}. T1 fixed weight-bm25/weight-vector at 0.4/0.6 in {@code
+ *   application.yaml} from the D7 sweep and re-enabled the test; see that method's own Javadoc
+ *   and hybrid-rag Spec Tech Review "AC-13 소유권 재정정 (2026-08-28)". The weights are read from
+ *   the real {@code application.yaml} (not overridden here), so a future retune that breaks the
+ *   exact-match ordering fails this test rather than passing silently.
  */
 @TestPropertySource(properties = "app.search.mode=hybrid")
 class HybridDocumentRetrieverIntegrationTest extends IntegrationTestBase {
@@ -149,17 +149,22 @@ class HybridDocumentRetrieverIntegrationTest extends IntegrationTestBase {
                 .isCloseTo(expectedScore, org.assertj.core.data.Offset.offset(1e-9));
     }
 
+    /**
+     * [Purpose] AC-13's final evidence (eval-usage-dashboard:T1, 2026-09-01). The {@code @Disabled}
+     *   T7 left here was removed once T1 fixed {@code weight-bm25=0.4}/{@code weight-vector=0.6}
+     *   in {@code application.yaml} from the D7 sweep: with the BM25 axis ranking the competitor
+     *   first (R-F) and the vector axis ranking the exact match first, the fused scores are now
+     *   {@code 0.4/62 + 0.6/61 = 0.016288} (exact) vs {@code 0.4/61 + 0.6/62 = 0.016235}
+     *   (competitor) instead of the 0.5/0.5 dead heat the tie-break rule resolved the wrong way.
+     * [Caution] The vector axis here is {@code StubEmbeddingModel}; the two raw thresholds are
+     *   pinned to 0.0 for every test context ({@code config/application.yaml}) because the stub's
+     *   cosine scale is unrelated to the production bge-m3 scale. What this test proves is the
+     *   weight decision (rank arithmetic), which is scale-free; the production-side confirmation of
+     *   the same weights is the D7 stage-2 sweep ({@code docs/eval/threshold-sweep-2026-09-01.md}).
+     */
     @Test
-    @Disabled("hybrid-rag:AC-13 최종 확정은 eval-usage-dashboard Spec T1(D7 가중치 확정)로 이관됨 -- "
-            + "docs/specs/2026-08-25_hybrid-rag.md Tech Review 'AC-13 소유권 재정정 (2026-08-28, T7 "
-            + "구현 중 R-F 현실화 — 사용자 결정으로 D7 이월)' 절 참고. 기본 가중치(rrfK=60, weight 0.5/0.5)에서 정확매치 "
-            + "'ES-2024-A'(BM25 2.383)와 경쟁 청크 'ES-2024-B는 별도 코드입니다'(BM25 3.546)의 RRF 융합 "
-            + "점수가 0.5/61 + 0.5/62 로 완전 동점이 되고, 동점 처리 규칙(먼저 accumulate된 BM25 축 우선)이 "
-            + "경쟁 청크를 1위로 만들어 이 테스트가 실패한다 -- Spec §8 R-F 의 현실화이며 구현 결함이 아니다. "
-            + "eval-usage-dashboard:T1 이 가중치를 확정한 뒤 이 @Disabled 를 제거하는 것이 AC-13 최종 증거가 "
-            + "된다. 삭제 금지.")
     @DisplayName("[hybrid-rag:AC-13] mode=hybrid 로 \"ES-2024-A\" 질의 시 해당 청크가 결과 1위로 반환된다 "
-            + "(R-F 경쟁 청크 포함, T7 최종 검증)")
+            + "(R-F 경쟁 청크 포함, T1 확정 가중치 0.4/0.6 에서 최종 검증)")
     void rankExactMatchFirstForProductCodeQuery() {
         // given: Spec §6 시드 데이터(D1 스파이크 문장) plus R-F's own required competitor
         // ("ES-2024-B는 별도 코드입니다" -- a short chunk sharing the entire product code, which

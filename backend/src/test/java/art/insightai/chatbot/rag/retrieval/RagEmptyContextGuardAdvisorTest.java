@@ -65,6 +65,22 @@ class RagEmptyContextGuardAdvisorTest {
                 .contains("제공된 문서에서 찾을 수 없습니다");
     }
 
+    @Test
+    @DisplayName("[hybrid-rag:AC-23] 답변 전체가 고정 거절 문구(마침표·공백 유무 무관)일 때만 isNotFoundAnswer 가 참이고, "
+            + "문구를 포함하되 다른 내용이 더 있는 답변·null·빈 문자열은 거짓이다")
+    void recognizesOnlyAnAnswerThatIsExactlyTheFixedRefusalSentence() {
+        // then -- literal from the AC/prompt text, not the production constant
+        assertThat(RagEmptyContextGuardAdvisor.isNotFoundAnswer("제공된 문서에서 찾을 수 없습니다.")).isTrue();
+        assertThat(RagEmptyContextGuardAdvisor.isNotFoundAnswer("제공된 문서에서 찾을 수 없습니다")).isTrue();
+        assertThat(RagEmptyContextGuardAdvisor.isNotFoundAnswer("  제공된 문서에서 찾을 수 없습니다 .\n")).isTrue();
+        // an answer that says more than the sentence answers something -- it keeps its sources
+        assertThat(RagEmptyContextGuardAdvisor.isNotFoundAnswer(
+                "매출은 제공된 문서에서 찾을 수 없습니다. 다만 직원 수는 17명입니다.")).isFalse();
+        assertThat(RagEmptyContextGuardAdvisor.isNotFoundAnswer("죄송합니다, 제공된 문서에서 찾을 수 없습니다.")).isFalse();
+        assertThat(RagEmptyContextGuardAdvisor.isNotFoundAnswer("")).isFalse();
+        assertThat(RagEmptyContextGuardAdvisor.isNotFoundAnswer(null)).isFalse();
+    }
+
     // 2026-08-28 재작업 라운드 1 Low-6: [AC-5] 태그를 제거했다. 이 테스트가 실측하는 것은
     // notFoundResponse()가 요청 context를 변형 없이 그대로 응답 context로 옮긴다는 계약뿐이며,
     // AC-5 ③(sources 빈 배열)의 대리 지표로서의 근거는 RagAdvisorAssemblyTest의 태그된 테스트가

@@ -78,6 +78,37 @@ public final class RagEmptyContextGuardAdvisor implements CallAdvisor, StreamAdv
     public static final String NOT_FOUND_MESSAGE = "제공된 문서에서 찾을 수 없습니다.";
 
     /**
+     * [Purpose] Reports whether a complete assistant answer is the fixed "not found" sentence and
+     *   nothing else -- the shape {@code NonceBoundaryContextAugmenter}'s prompt instructs the model
+     *   to produce when the retrieved context does not contain the answer (D7/T1, 2026-09-01).
+     * [Rationale] The D7 sweep measured that no axis-native score threshold separates the eval
+     *   set's "no answer in the corpus" questions from the answerable ones on a single-document
+     *   corpus (both BM25 and cosine distributions overlap -- {@code docs/eval/raw-score-
+     *   distribution-2026-09-01.md}), so the zero-document guard above cannot be the only "모른다"
+     *   path: the model itself has to say so when it is handed chunks that do not answer the
+     *   question. hybrid-rag Spec D5 ("근거가 있는 척 하지 않는다") and AC-5 clause ③ then require the
+     *   {@code sources} list to be empty for such an answer -- a refusal accompanied by citations
+     *   would present the retrieved chunks as evidence for an answer that was never given. {@code
+     *   ChatService} consults this method for the terminal chunk so the wire payload and {@code
+     *   messages.sources} both drop the citations in exactly that case.
+     * [Caution] Deliberately an <b>equality</b> check (surrounding whitespace and the trailing
+     *   period ignored), not {@code contains}: an answer such as "X 는 제공된 문서에서 찾을 수 없습니다.
+     *   다만 Y 는 …" does answer something and must keep its citations. The prompt asks for the
+     *   sentence "and nothing else", so a compliant model produces exactly this shape; a model that
+     *   embeds the sentence in a longer answer simply keeps its sources, which is the safe direction.
+     */
+    public static boolean isNotFoundAnswer(String answer) {
+        if (answer == null) {
+            return false;
+        }
+        String normalized = answer.strip();
+        if (normalized.endsWith(".")) {
+            normalized = normalized.substring(0, normalized.length() - 1).strip();
+        }
+        return normalized.equals(NOT_FOUND_MESSAGE.substring(0, NOT_FOUND_MESSAGE.length() - 1));
+    }
+
+    /**
      * [Rationale] This response is synthesized by this class, never by a real model call, so
      *   the finish reason is never subject to R-G (the risk that the OpenAI SDK maps an unknown
      *   upstream {@code finish_reason} to {@code null}). A fixed non-blank value here guarantees

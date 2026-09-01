@@ -100,11 +100,19 @@ app:
   auth:
     mode: none                # none | works
   search:
-    mode: vector              # vector | hybrid (D6)
+    # ── D7 스윕 확정값 (eval-usage-dashboard T1, 2026-09-01) ──
+    # 근거 파일: {DOC_ROOT}/docs/eval/raw-score-distribution-2026-09-01.md (1단계, 원점수 분포)
+    #            {DOC_ROOT}/docs/eval/threshold-sweep-2026-09-01.md          (2단계, 실호출 판정)
+    # 이 값들은 SearchDefaultsReflectSweepTest 가 그대로 고정한다 — 바꾸면 그 테스트가 먼저 깨진다.
+    mode: hybrid              # vector | hybrid (D6). D7 2단계: hybrid 와 vector 가 판정 동률, hybrid 가
+                              # 지연이 낮고 hybrid-rag:AC-13(정확 코드 매칭)은 hybrid 에서만 성립 → hybrid
     top-k: 5
     rrf-k: 60
-    weight-bm25: 0.5
-    weight-vector: 0.5
+    # 0.5/0.5 → 0.4/0.6 (hybrid-rag:AC-13, §8 R-F). BM25 는 짧은 근사 코드 청크를 정확 매칭보다
+    # 우대해 두 축이 서로 반대 순위를 내면 동률이 되고 동률 규칙이 오답을 1위로 올린다. 실측
+    # (1단계)에서도 정답 청크가 top-1 인 비율이 코사인 9/15 > BM25 5/15 라 벡터 축이 더 믿을 만하다.
+    weight-bm25: 0.4
+    weight-vector: 0.6
     bm25-top-k: 20             # 기획서 §7 "top 20" 을 상수 대신 프로퍼티로 (hybrid-rag Spec §8-D3)
     vector-top-k: 20           # 동상
     score-threshold: 0.0       # 잠정 비활성. R6 로 필요성은 확정, 수치는 D7 튜닝 대상 (hybrid-rag Spec §8-D2)
@@ -117,8 +125,15 @@ app:
     # 거를 수 있는 유일한 지점이 융합 앞이다. 두 개로 나눈 이유는 스케일이
     # 다르기 때문이다 -- BM25 는 상한이 없고 코퍼스마다 다르며 코사인은 유계다.
     # 0.0 이면 그 축의 필터는 비활성(리스트를 그대로 통과)이다.
-    bm25-raw-score-threshold: 0.0     # D1 스파이크 5-c 의 1.18(무관) / 3.99(정답) 가 이 스케일의 값이다
-    vector-raw-score-threshold: 0.0   # 코사인 유사도 스케일. 실측 전까지 비활성
+    # D7 1단계 실측(문서 1건 코퍼스, 25문항): '있는 질문'의 정답 청크 최저 원점수는 BM25 1.536 /
+    # 코사인 0.387 이고, '없는 질문'의 top-1 은 BM25 최고 9.24 / 코사인 최고 0.556 이다 — 두 분포가
+    # 겹쳐 어떤 임계값도 있는/없는 질문을 가르지 못한다. 그래서 이 값들은 '분리선'이 아니라
+    # '노이즈 하한'이다: 정답 청크는 전부 통과시키고(안전 마진 BM25 0.24 / 코사인 0.037), 그 아래
+    # 꼬리(1단계 표에서 BM25 9행·코사인 5행)만 자른다. D1 스파이크의 1.18점 무관 행은 이 값에서
+    # 잘린다(AC-10). '없는 질문'의 "모른다"는 임계값이 아니라 프롬프트 고정 문구 + 거절 시
+    # sources 비우기(hybrid-rag AC-23)로 닫는다. 문서가 늘어나면 재측정 대상(eval Spec §8 R6).
+    bm25-raw-score-threshold: 1.3     # ParadeDB pdb.score 스케일
+    vector-raw-score-threshold: 0.35  # bge-m3 코사인 유사도 스케일
   rerank:
     enabled: false
     model: ${RERANK_MODEL:cohere/rerank-v3.5}

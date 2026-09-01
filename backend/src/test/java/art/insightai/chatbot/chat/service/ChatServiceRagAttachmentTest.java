@@ -533,6 +533,45 @@ class ChatServiceRagAttachmentTest {
      *   AC holds.
      */
     @Test
+    @DisplayName("[hybrid-rag:AC-23] 검색이 문서를 찾았더라도 모델이 고정 거절 문구 '제공된 문서에서 찾을 수 없습니다.' 만으로 "
+            + "답하면 마지막 청크의 sources 와 messages.sources 가 모두 빈 배열이다")
+    void dropsSourcesWhenTheModelAnswersWithExactlyTheFixedRefusalSentence() {
+        // given: retrieval returns a real chunk (so resolveSources would normally yield 1 source),
+        // but the model -- following the prompt's rule 1 -- replies with the refusal sentence only
+        HybridDocumentRetriever hybridDocumentRetriever = mock(HybridDocumentRetriever.class);
+        RetrievedChunk chunk = new RetrievedChunk(
+                "chunk-1", "회사 개요: 2014년 설립, 직원 17명",
+                Map.of("document_id", UUID.randomUUID().toString(), "filename", "회사소개서.pdf", "page", 4), 0.42);
+        when(hybridDocumentRetriever.retrieve(anyString())).thenReturn(List.of(chunk));
+        StubChatModel stubChatModel = new StubChatModel();
+        stubChatModel.enqueueTokens(List.of("제공된 문서에서 ", "찾을 수 없습니다."), "stop",
+                new StubChatModel.Usage(10, 5, null));
+        RetrievalAugmentationAdvisor ragAdvisor = ragAdvisor(hybridDocumentRetriever, stubChatModel);
+        RagEmptyContextGuardAdvisor guardAdvisor = ragAdvisorConfig.ragEmptyContextGuardAdvisor();
+        String question = "작년 매출이 얼마야?";
+        when(chatMemoryRepository.findByConversationId(CONVERSATION_ID.toString()))
+                .thenReturn(List.of(new UserMessage(question)));
+        ChatService service = new ChatService(ChatClient.builder(stubChatModel), conversationService,
+                chatMemoryRepository, TestAppPropertiesFactory.valid(), new RagAdvisorPair(ragAdvisor, guardAdvisor),
+                sourceRefMapper, objectMapper);
+
+        // when
+        List<ChatChunk> chunks = service.streamReply(conversationStub(true), null, question).collectList().block();
+
+        // then: the answer streamed through (this is NOT the zero-document guard path -- the model was
+        // called, as proven by the consumed script) but the terminal chunk carries sources: []
+        String answer = chunks.stream().map(ChatChunk::delta).filter(d -> d != null).reduce("", String::concat);
+        assertThat(answer).isEqualTo("제공된 문서에서 찾을 수 없습니다.");
+        assertThat(stubChatModel.capturedPrompts()).hasSize(1);
+        assertThat(chunks.get(chunks.size() - 1).sources()).isNotNull().isEmpty();
+
+        // then: the persisted row agrees with the wire -- "[]", not the one-source JSON
+        ArgumentCaptor<Message> assistantMessageCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(conversationService).persistAssistantTurn(assistantMessageCaptor.capture());
+        assertThat(assistantMessageCaptor.getValue().getSources()).isEqualTo("[]");
+    }
+
+    @Test
     @DisplayName("(무태그 -- BL-009 상호작용 버그 리포트, 코디네이터 지시로 재현) 실제 마지막 응답의 finishReason 을 "
             + "SDK 가 인식하지 못해 null 로 남기면(BL-009), 실제로 문서를 찾았어도 와이어 마지막 청크와 저장된 "
             + "messages.sources 모두 sources 를 유실한다 (버그, AC 아님) "

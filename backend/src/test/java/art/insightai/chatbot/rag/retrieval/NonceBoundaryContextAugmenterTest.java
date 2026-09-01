@@ -38,6 +38,20 @@ class NonceBoundaryContextAugmenterTest {
     private static final Pattern REAL_END_MARKER = Pattern.compile("\\[CONTEXT-([^\\]]+)-END\\]");
 
     @Test
+    @DisplayName("[hybrid-rag:AC-23] 렌더된 프롬프트가 '답이 컨텍스트에 없으면 고정 문구 «제공된 문서에서 찾을 수 없습니다.» "
+            + "만으로 답하라'는 규칙을 담는다 (D7/T1 -- 판정기·ChatService 가 같은 문구에 묶여 있다)")
+    void instructsTheModelToAnswerWithExactlyTheFixedRefusalSentence() {
+        Query augmented = new NonceBoundaryContextAugmenter()
+                .augment(new Query(QUERY_TEXT), List.of(new Document("정상 정책 내용입니다.")));
+        String renderedText = augmented.text();
+
+        // literal from the AC text / EvalJudge.REJECTION_PHRASE, not the production constant
+        assertThat(renderedText).contains("제공된 문서에서 찾을 수 없습니다.");
+        assertThat(renderedText).contains("nothing else");
+        assertThat(renderedText).doesNotContain("just say that you don't know");
+    }
+
+    @Test
     @DisplayName("(무태그 -- Spec §8 R-H 회귀 가드, 대응 AC 없음. 2R Block security Medium-1) "
             + "청크 본문이 예전 방식의 고정 마커 리터럴([CONTEXT END] 등)을 재현해도 실제 경계(예측 불가능한 "
             + "nonce 마커)를 앞지르지 못하고, 그 뒤에 오는 가짜 지시문은 여전히 실제 컨텍스트 경계 안쪽에 남는다")

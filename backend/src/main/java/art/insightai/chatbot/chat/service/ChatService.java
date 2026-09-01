@@ -8,6 +8,7 @@ import art.insightai.chatbot.common.config.AppProperties;
 import art.insightai.chatbot.rag.domain.RetrievedChunk;
 import art.insightai.chatbot.rag.domain.SourceRef;
 import art.insightai.chatbot.rag.retrieval.RagAdvisorPair;
+import art.insightai.chatbot.rag.retrieval.RagEmptyContextGuardAdvisor;
 import art.insightai.chatbot.rag.retrieval.SourceRefMapper;
 
 import com.openai.core.JsonValue;
@@ -530,6 +531,19 @@ public class ChatService {
         if (finishReason != null) {
             finishReasonHolder.set(finishReason);
             sources = resolveSources(response, ragEnabled, conversationId);
+            // D7/T1 (2026-09-01): when the model answered with exactly the fixed "not found"
+            // sentence (the prompt's instruction for context that does not contain the answer),
+            // the retrieved chunks are not evidence for anything -- drop them, so this answer
+            // carries the same `sources: []` shape as the zero-document guard path (hybrid-rag
+            // AC-5 clause ③, D5 "근거가 있는 척 하지 않는다"). contentBuilder holds the complete
+            // answer here: every delta chunk precedes the finish-reason-bearing terminal one.
+            // Done here, not in resolveSources, so wire and messages.sources stay identical.
+            if (!sources.isEmpty()
+                    && RagEmptyContextGuardAdvisor.isNotFoundAnswer(contentBuilder.toString())) {
+                log.debug("모델이 고정 거절 문구로 답해 sources {}건을 비웁니다 (conversationId={})",
+                        sources.size(), conversationId);
+                sources = List.of();
+            }
             sourcesHolder.set(sources);
         }
 
