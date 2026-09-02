@@ -40,12 +40,15 @@ import art.insightai.chatbot.chat.domain.Conversation;
 import art.insightai.chatbot.chat.service.ChatService;
 import art.insightai.chatbot.chat.service.ConversationService;
 import art.insightai.chatbot.common.config.AppProperties;
+import art.insightai.chatbot.common.lang.Language;
 import art.insightai.chatbot.eval.evalset.EvalCase;
 import art.insightai.chatbot.eval.evalset.EvalSet;
 import art.insightai.chatbot.eval.evalset.EvalSetLoader;
 import art.insightai.chatbot.eval.judge.EvalJudge;
 import art.insightai.chatbot.eval.judge.EvalResponse;
 import art.insightai.chatbot.eval.judge.JudgeResult;
+import art.insightai.chatbot.eval.report.EvalLanguageReport;
+import art.insightai.chatbot.eval.report.EvalLanguageReportRow;
 import art.insightai.chatbot.eval.report.EvalReportAggregator;
 import art.insightai.chatbot.eval.report.EvalReportRow;
 import art.insightai.chatbot.eval.report.JudgedCase;
@@ -55,7 +58,7 @@ import art.insightai.chatbot.support.DatabaseGuardExtension;
 import art.insightai.chatbot.user.AnonymousUserService;
 
 /**
- * [Purpose] D7 sweep, stage 2 (T1): runs the 25-question eval set through the real production
+ * [Purpose] D7 sweep, stage 2 (T1): runs the production eval set through the real production
  *   pipeline (real bge-m3 embeddings, real chat completions, no rerank) at the axis-native
  *   thresholds / weights stage 1 proposed, and records the judge verdict per configuration to
  *   {@code {DOC_ROOT}/docs/eval/threshold-sweep-<date>.md}. Three configurations, in class order:
@@ -64,6 +67,15 @@ import art.insightai.chatbot.user.AnonymousUserService;
  *   comparison AC-12 needs at the final thresholds), (3) {@code mode=hybrid} with both raw
  *   thresholds off (isolates what the thresholds themselves change). A fourth nested class closes
  *   hybrid-rag:AC-9 clause ② with a real two-turn conversation.
+ *   Card T9 (multilingual-support, 2026-09-02): T8 grew the production eval set from 25 (ko only)
+ *   to 46 (25 ko + 21 en/zh/ja, {@code EvalCase#lang()}). AC-9a's pass/fail gate ({@link
+ *   #assertRowSanity}, 15/10) stays scoped to the {@link Language#KO} subset only (AD-11 ②) --
+ *   every configuration still runs the full 46-question set through the real pipeline, but only
+ *   the ko-tagged {@link JudgedCase}s are handed to {@link EvalReportAggregator#aggregate(List)}
+ *   for the gated {@link EvalReportRow}. The full 46-case list is additionally passed to {@link
+ *   EvalReportAggregator#aggregateByLanguage(List)} to produce a per-language {@link
+ *   EvalLanguageReport} (AC-10/AC-11 baseline) -- measurement only, no gate of its own (AD-11,
+ *   {@code EvalLanguageReport}'s own Javadoc).
  * [Rationale] The 2026-09-01 E5 sweep ({@code sweep-report-2026-09-01.md}) scored every
  *   combination {@code notFoundCorrect 0/10, hallucination 10} -- and the persisted answers show
  *   that verdict was mostly a judge artifact: the model refused honestly in free-form Korean
@@ -76,14 +88,17 @@ import art.insightai.chatbot.user.AnonymousUserService;
  *   notFoundCorrect} (refusal AND empty sources) reachable at all when chunks are retrieved.
  *   {@code app.search.score-threshold} (the post-fusion filter, AC-4) stays 0.0 in every
  *   configuration: BL-025 established it carries no relevance information.
- * [Caution] Real cost -- 75 chat completions + 4 for the multi-turn probe (+ embeddings). Report
- *   the measured {@code usage.cost} sum, never an estimate. {@code @Tag("eval")}, run with {@code
- *   -Peval}; needs {@code chatbot-db}, {@code infra/.env}, and the {@code Z:} drive. Each nested
- *   context deletes every user/conversation/message it creates. Not-found answers and the
- *   compressed multi-turn query are written to the report file (DOC_ROOT, not the repo) because
- *   they are the only evidence of *why* a verdict came out the way it did.
+ * [Caution] Real cost -- 3 x 46 = 138 chat completions + 4 for the multi-turn probe (+ embeddings),
+ *   up from 75 pre-T9 now that the eval set carries the en/zh/ja items. Report the measured
+ *   {@code usage.cost} sum, never an estimate. {@code @Tag("eval")}, run with {@code -Peval};
+ *   needs {@code chatbot-db}, {@code infra/.env}, and the {@code Z:} drive. Each nested context
+ *   deletes every user/conversation/message it creates. Not-found answers and the compressed
+ *   multi-turn query are written to the report file (DOC_ROOT, not the repo) because they are the
+ *   only evidence of *why* a verdict came out the way it did.
  * [AC] eval-usage-dashboard:AC-12
  * [AC] hybrid-rag:AC-9
+ * [AC] multilingual-support:AC-10
+ * [AC] multilingual-support:AC-11
  */
 @Tag("eval")
 @TestClassOrder(ClassOrderer.OrderAnnotation.class)
@@ -99,7 +114,13 @@ class EvalThresholdSweepIntegrationTest {
             long latencyMs, BigDecimal costUsd, JudgeResult result) {
     }
 
-    private record SweepRun(String label, String description, EvalReportRow row, List<CaseDetail> cases) {
+    /**
+     * [Purpose] One configuration's sweep result -- {@code row} is the AC-9a-gated {@link
+     *   EvalReportRow} scoped to the {@link Language#KO} subset only; {@code languageReport} is the
+     *   ungated per-language breakdown (AC-10/AC-11) over the full case list (T9).
+     */
+    private record SweepRun(String label, String description, EvalReportRow row, List<CaseDetail> cases,
+            EvalLanguageReport languageReport) {
     }
 
     /**
@@ -170,7 +191,9 @@ class EvalThresholdSweepIntegrationTest {
 
                 EvalResponse response = new EvalResponse(answer, sourceFilenames, latencyMs, costUsd);
                 JudgeResult result = EvalJudge.judge(evalCase, response);
-                judgedCases.add(new JudgedCase(response, result, 0, terminal.finishReason()));
+                // 5-arg canonical: carries the case's real declared language (AD-10) instead of the
+                // 4-arg legacy overload's silent Language.KO default -- T9
+                judgedCases.add(new JudgedCase(response, result, 0, terminal.finishReason(), evalCase.lang()));
                 details.add(new CaseDetail(evalCase, answer, sourceFilenames, terminal.finishReason(),
                         latencyMs, costUsd, result));
                 log.info("[threshold sweep] configuration={} question=\"{}\" latencyMs={} cost={} finishReason={} sources={}",
@@ -179,10 +202,19 @@ class EvalThresholdSweepIntegrationTest {
         } finally {
             deleteSweepData(jdbcTemplate, userId);
         }
-        EvalReportRow row = EvalReportAggregator.aggregate(judgedCases);
-        SweepRun run = new SweepRun(label, description, row, details);
+        // AC-9a's gate stays scoped to the ko subset only (AD-11 ②, T9) -- the full 46-case list
+        // would desync foundTotal/notFoundTotal from the fixed 15/10 AC9_* constants EvalReportRow
+        // .passed() checks, silently failing every configuration for the wrong reason.
+        List<JudgedCase> koJudgedCases = judgedCases.stream()
+                .filter(judgedCase -> judgedCase.questionLanguage() == Language.KO)
+                .toList();
+        EvalReportRow row = EvalReportAggregator.aggregate(koJudgedCases);
+        // Ungated per-language breakdown over the full case list (AC-10/AC-11 baseline, T9).
+        EvalLanguageReport languageReport = EvalReportAggregator.aggregateByLanguage(judgedCases);
+        SweepRun run = new SweepRun(label, description, row, details, languageReport);
         RUNS.add(run);
         log.info("[threshold sweep] configuration={} row={}", label, row);
+        log.info("[threshold sweep][multilingual] configuration={} languageReport={}", label, languageReport);
         return run;
     }
 
@@ -492,6 +524,28 @@ class EvalThresholdSweepIntegrationTest {
             body.append("\n## hybrid-rag:AC-9 clause ② -- real compressed query\n\n");
             body.append("- turn 1: `회사 설립일이 언제야?`\n- turn 2 (sent): `그때 대표이사는 누구였어?`\n");
             body.append("- turn 2 (query that reached the vector axis): `").append(compressedMultiTurnQuery).append("`\n");
+
+            // multilingual-support AC-10/AC-11 baseline (T9): measurement only -- no pass/fail gate
+            // of its own (AD-11). AC-9a above is scored on the ko subset only; these rows show the
+            // same four metrics plus the answer-language match rate for every language, including
+            // languages that gate did not evaluate.
+            body.append("\n## 언어별 측정 (multilingual-support AC-10/AC-11 -- 게이트 없음, 측정치만)\n\n");
+            for (SweepRun run : RUNS) {
+                body.append("\n### ").append(run.label()).append('\n');
+                body.append("| language | answerCorrect/found | sourceCorrect/found | notFoundCorrect/notFound | ")
+                        .append("hallucination | answerLangMatch/caseTotal |\n");
+                body.append("|---|---|---|---|---|---|\n");
+                for (EvalLanguageReportRow langRow : run.languageReport().rows()) {
+                    EvalReportRow metrics = langRow.metrics();
+                    body.append("| ").append(langRow.language())
+                            .append(" | ").append(metrics.answerCorrect()).append('/').append(metrics.foundTotal())
+                            .append(" | ").append(metrics.sourceCorrect()).append('/').append(metrics.foundTotal())
+                            .append(" | ").append(metrics.notFoundCorrect()).append('/').append(metrics.notFoundTotal())
+                            .append(" | ").append(metrics.hallucinationCount())
+                            .append(" | ").append(langRow.answerLanguageMatchCount()).append('/').append(langRow.caseTotal())
+                            .append(" |\n");
+                }
+            }
 
             for (SweepRun run : RUNS) {
                 body.append("\n## ").append(run.label()).append(" -- per-case detail\n\n");
