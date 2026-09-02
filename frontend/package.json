@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev -H 127.0.0.1",
     "build": "next build",
+    "build:sites": "node sites/build.mjs",
+    "test:sites": "node --test sites/worker.check.mjs ../infra/sites-gateway.test.mjs",
     "start": "next start -H 127.0.0.1",
     "lint": "eslint",
     "test": "jest"

@@ -36,6 +36,8 @@ out/
 ### Node / Next.js ###
 node_modules/
 frontend/.next/
+frontend/.next-sites/
+frontend/dist/
 frontend/out/
 .pnp
 .pnp.js

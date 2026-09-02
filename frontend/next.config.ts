@@ -320,4 +320,9 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// Sites serves the exported UI with a separate authenticated Worker API proxy.
+// Keep the normal Next server and its local rewrites unchanged for local use.
+const sitesConfig: NextConfig = { ...nextConfig, output: "export", distDir: ".next-sites" };
+delete sitesConfig.rewrites;
+delete sitesConfig.headers;
+export default process.env.INSIGHT_SITES_BUILD === "1" ? sitesConfig : nextConfig;
