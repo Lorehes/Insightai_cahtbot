@@ -1,8 +1,11 @@
 package art.insightai.chatbot.eval.report;
 
+import art.insightai.chatbot.common.lang.Language;
+import art.insightai.chatbot.common.lang.LanguageDetector;
 import art.insightai.chatbot.eval.judge.JudgeResult;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -22,8 +25,19 @@ import java.util.Map;
  * [AC] eval-usage-dashboard:AC-8
  * [AC] eval-usage-dashboard:AC-19a
  * [AC] eval-usage-dashboard:AC-20a
+ * [AC] multilingual-support:AC-10
+ * [AC] multilingual-support:AC-11
  */
 public final class EvalReportAggregator {
+
+    /**
+     * [Purpose] The fixed row order {@link #aggregateByLanguage} emits — every eval-set-valid
+     *   language (AD-9: KO/EN/ZH/JA, {@link Language#UNKNOWN} excluded since no eval-set case may
+     *   declare it) — so AC-10's "4개 언어 행이 각각 존재" holds even for a language with zero cases
+     *   in this run.
+     */
+    private static final List<Language> LANGUAGE_REPORT_ORDER =
+            List.of(Language.KO, Language.EN, Language.ZH, Language.JA);
 
     private EvalReportAggregator() {
     }
@@ -134,5 +148,51 @@ public final class EvalReportAggregator {
                 notFoundCorrect, notFoundTotal, hallucinationCount,
                 avgLatencyMs, totalCostUsd, missingCostCount,
                 excludedByStatus, retrievedNonIndexedChunkCount, finishReasonCounts);
+    }
+
+    /**
+     * [Purpose] Builds the language-scoped view of one sweep run's judged cases (AD-10): one
+     *   {@link EvalLanguageReportRow} per {@link #LANGUAGE_REPORT_ORDER} language (AC-10) plus a
+     *   {@link CaseLanguageMatch} for every case in {@code judgedCases}, in input order (AC-11).
+     * [Rationale] Per-language rows reuse the 1-arg {@link #aggregate(List)} overload directly —
+     *   AD-10 says to reuse {@code aggregate} as-is, and {@code excludedByStatus} (AC-19a field 1)
+     *   is a whole-run snapshot, not something that can be split per language, so there is no
+     *   per-language value to pass as the 2-arg overload's second parameter. A language with no
+     *   cases in this run still gets a row: {@link #aggregate(List)} on an empty list returns a
+     *   well-defined all-zero {@link EvalReportRow} (see its class Javadoc Caution), so no special
+     *   casing is needed to satisfy AC-10's "4개 언어 행이 각각 존재". The answer-language match is
+     *   computed here, once per case, with {@link LanguageDetector#detect(String)} on {@code
+     *   judgedCase.response().answer()} — AD-10 requires the aggregator to compute this itself
+     *   rather than accept a pre-computed value, since no sweep runner exists yet to have computed
+     *   one.
+     * [Caution] {@code caseIndex} on each {@link CaseLanguageMatch} is the case's position in the
+     *   input {@code judgedCases} list, not a position within its language group — AC-11 asks for
+     *   a per-case record of the full judged set, not a per-language-group one.
+     * [AC] multilingual-support:AC-10
+     * [AC] multilingual-support:AC-11
+     */
+    public static EvalLanguageReport aggregateByLanguage(List<JudgedCase> judgedCases) {
+        List<CaseLanguageMatch> caseMatches = new ArrayList<>();
+        for (int caseIndex = 0; caseIndex < judgedCases.size(); caseIndex++) {
+            JudgedCase judgedCase = judgedCases.get(caseIndex);
+            Language questionLanguage = judgedCase.questionLanguage();
+            Language answerLanguage = LanguageDetector.detect(judgedCase.response().answer());
+            caseMatches.add(new CaseLanguageMatch(
+                    caseIndex, questionLanguage, answerLanguage, questionLanguage == answerLanguage));
+        }
+
+        List<EvalLanguageReportRow> rows = new ArrayList<>();
+        for (Language language : LANGUAGE_REPORT_ORDER) {
+            List<JudgedCase> languageCases = judgedCases.stream()
+                    .filter(judgedCase -> judgedCase.questionLanguage() == language)
+                    .toList();
+            int answerLanguageMatchCount = (int) caseMatches.stream()
+                    .filter(match -> match.questionLanguage() == language && match.matched())
+                    .count();
+            rows.add(new EvalLanguageReportRow(
+                    language, aggregate(languageCases), answerLanguageMatchCount, languageCases.size()));
+        }
+
+        return new EvalLanguageReport(rows, caseMatches);
     }
 }

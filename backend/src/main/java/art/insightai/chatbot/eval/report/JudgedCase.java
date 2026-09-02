@@ -1,5 +1,6 @@
 package art.insightai.chatbot.eval.report;
 
+import art.insightai.chatbot.common.lang.Language;
 import art.insightai.chatbot.eval.judge.EvalJudge;
 import art.insightai.chatbot.eval.judge.EvalResponse;
 import art.insightai.chatbot.eval.judge.JudgeResult;
@@ -15,32 +16,55 @@ import art.insightai.chatbot.eval.judge.JudgeResult;
  *   reads, and placing them on {@code EvalResponse} would force every one of its ~11 existing
  *   construction sites in {@code EvalJudgeTest} (AC-3/4/5/6a, already {@code ✅}) to supply values
  *   they do not care about; {@code JudgedCase} is already the E4/E6-owned pairing type, so it is
- *   the lower-blast-radius home for card E6's additions.
+ *   the lower-blast-radius home for card E6's additions. {@code questionLanguage} (AD-10) is a
+ *   third per-case field added on the same principle: {@link EvalReportAggregator#aggregateByLanguage}
+ *   needs to know which language each case's question was declared in (AC-10) without threading a
+ *   parallel list alongside {@code judgedCases}.
  * [Rationale] {@code EvalJudge} (E3) intentionally returns only a {@code JudgeResult} without
  *   echoing back latency or cost, keeping it a pure judgement function (D-2). E4 needs both to
  *   build a report row, so this record is the pairing E5 (sweep runner) will build one instance of
  *   per case, per combination. E5 is also the one place expected to populate
  *   {@code retrievedNonIndexedChunkCount}/{@code finishReason} from the real retrieval/chat
  *   pipeline (E6 does not know or care where those values come from — Tech Review card E6 note).
+ *   {@code questionLanguage} is expected to be copied from the source {@code EvalCase#lang()} by
+ *   whichever caller builds this record (E5 sweep runner, or a test fixture) — {@code JudgedCase}
+ *   itself never derives it.
  * [AC] eval-usage-dashboard:AC-19a
  * [AC] eval-usage-dashboard:AC-20a
+ * [AC] multilingual-support:AC-10
  */
 public record JudgedCase(
         EvalResponse response,
         JudgeResult result,
         int retrievedNonIndexedChunkCount,
-        String finishReason) {
+        String finishReason,
+        Language questionLanguage) {
+
+    /**
+     * [Purpose] Legacy 4-arg shape kept for every pre-existing call site ({@code
+     *   EvalSweepIntegrationTest}, {@code EvalThresholdSweepIntegrationTest}) that predates AD-10
+     *   and has no opinion on the question's language.
+     * [Rationale] Defaults {@code questionLanguage} to {@link Language#KO} — the same default
+     *   {@code EvalCase.Found}/{@code EvalCase.NotFound}'s own legacy constructors use (AD-9) — so
+     *   those call sites keep pairing with a case whose declared language they never set,
+     *   following the exact "순수 추가만" pattern already used for
+     *   {@code retrievedNonIndexedChunkCount}/{@code finishReason} below.
+     */
+    public JudgedCase(EvalResponse response, JudgeResult result, int retrievedNonIndexedChunkCount, String finishReason) {
+        this(response, result, retrievedNonIndexedChunkCount, finishReason, Language.KO);
+    }
 
     /**
      * [Purpose] Legacy 2-arg shape kept for every pre-existing call site ({@code JudgedCaseTest},
      *   {@code EvalReportAggregatorTest}'s {@code found()}/{@code notFound()} helpers) that has no
-     *   opinion on the two new contamination fields.
-     * [Rationale] Defaults to {@code retrievedNonIndexedChunkCount=0}/{@code finishReason=null} —
-     *   "no contamination observed" — so those tests keep verifying AC-6b/AC-8/AC-9a exactly as
-     *   before without being touched by this card (E6 card note: "순수 추가만").
+     *   opinion on the contamination fields nor the question language.
+     * [Rationale] Defaults to {@code retrievedNonIndexedChunkCount=0}/{@code finishReason=null}/
+     *   {@code questionLanguage=Language.KO} — "no contamination observed, Korean by default" —
+     *   so those tests keep verifying AC-6b/AC-8/AC-9a exactly as before without being touched by
+     *   this card (E6/T7 card note: "순수 추가만").
      */
     public JudgedCase(EvalResponse response, JudgeResult result) {
-        this(response, result, 0, null);
+        this(response, result, 0, null, Language.KO);
     }
 
     /**
@@ -72,6 +96,7 @@ public record JudgedCase(
                 + ", costUsd=" + response.costUsd()
                 + "], result=" + result
                 + ", retrievedNonIndexedChunkCount=" + retrievedNonIndexedChunkCount
-                + ", finishReason=" + finishReason + "]";
+                + ", finishReason=" + finishReason
+                + ", questionLanguage=" + questionLanguage + "]";
     }
 }
