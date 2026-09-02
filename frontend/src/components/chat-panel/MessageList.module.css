@@ -33,9 +33,21 @@
 
 /* Alignment wrapper only -- the visible bubble styling lives on .userBubble below (the
    prototype's UserMessage is `<div style="display:flex;justify-content:flex-end">`, P:197). */
+/* `position: relative` 는 레이아웃용이 아니라 문서 스크롤을 지키기 위한 것이다.
+   `.visuallyHidden` 이 `position: absolute` 인데 조상 중 positioned 가 하나도 없으면 위치 기준이
+   `body` 가 되고, 그러면 `.page` 의 `overflow: hidden` 이 그것을 자르지 못한다 -- 클리핑은 그 요소의
+   위치 기준 사슬에 있는 조상만 적용되기 때문이다. 숨김 텍스트는 스크롤되는 목록 깊은 곳에 있어서
+   목록이 길어질수록 문서 좌표상 화면 아래로 내려가고, 잘리지 않으니 그만큼 문서 전체의 스크롤
+   영역이 늘어난다. 증상은 내용 없는 두 번째 스크롤바다.
+   2026-09-02 브라우저 실측: 답변 하나가 긴 상태에서 html.scrollHeight 1885 / clientHeight 1257,
+   그 628px 구간에는 아무 요소도 없었다. `.visuallyHidden` 을 display:none 으로 바꾸면 1257 로
+   정확히 떨어지고 되돌리면 1885 로 복귀했다. 행에 relative 를 주면 1257 이 된다.
+   ⚠ 같은 처리를 `.list` 에 주는 것으로는 해소되지 않는다(실측 1885 유지). 행 단위여야 한다.
+   ⚠ 이 행들에 relative 를 지우려면 `.visuallyHidden` 쪽 구조를 먼저 바꿔야 한다. */
 .userRow {
   display: flex;
   justify-content: flex-end;
+  position: relative;
 }
 
 /* P:204's `display:flex;gap:14px` -> --app-gap-md (12px), the same rounding the bubble's own
@@ -44,6 +56,8 @@
   display: flex;
   gap: var(--app-gap-md);
   align-items: flex-start;
+  /* 위 `.userRow` 주석 참고 -- 문서 스크롤 보호용이다. */
+  position: relative;
 }
 
 /* P:197-199. max-width:76% ported as-is (a proportion, not a length scale value). padding
