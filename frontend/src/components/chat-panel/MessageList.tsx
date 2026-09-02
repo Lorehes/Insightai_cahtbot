@@ -82,8 +82,9 @@ const EXAMPLE_QUESTIONS = [
  *   document-leak direction
  *   (an unconfirmed conversation could render/behave as if RAG were on). `TopBadge` and the
  *   RAG-OFF notice below both branch on `ragEnabled === false` specifically, not `!ragEnabled`,
- *   so `undefined` falls through to "render nothing" the same way the not-yet-implemented
- *   RAG-ON badge already does -- see {@link TopBadge}'s own [Caution]. A real caller ({@link
+ *   so `undefined` falls through to "render nothing" the same way `TopBadge`'s RAG-ON badges
+ *   (card T15, chat-prototype-port:AC-43) also do for their own unresolved cases -- see
+ *   {@link TopBadge}'s own [Caution]. A real caller ({@link
  *   ../chat-workspace/ChatWorkspace} via {@link ../chat-panel/ChatPanel}) always passes the
  *   *selected conversation's* actual value -- this is a conversation-level setting (Spec §Tech
  *   Review AD-6/§8 D-1), not a per-message field, so it lives on this component's own props, not
@@ -185,8 +186,9 @@ export function MessageList({
  *   is a single conditional render point serving the mutually-exclusive states the
  *   prototype renders in the same position (P:338-353): the streaming indicator while
  *   `streamStatus === "streaming"` (chat-prototype-port:AC-15), or -- once the stream has
- *   ended -- a RAG-evidence summary; see {@link TopBadge}'s own [Caution] for why only the
- *   OFF variant (chat-prototype-port:AC-24) is implemented today. Extracted out of {@link
+ *   ended -- a RAG-evidence summary covering both the OFF variant (chat-prototype-port:AC-24)
+ *   and the two ON variants (card T15, chat-prototype-port:AC-43); see {@link TopBadge}'s own
+ *   [Caution] for how the two badge families divide the cases. Extracted out of {@link
  *   MessageList}'s `.map` and wrapped in `React.memo` so that a SSE chunk which only changes
  *   the *streaming* message's `content` does not force every other, already-`"done"`,
  *   message to re-run its markdown parse (remark -> rehype -> React tree) on each chunk.
@@ -235,7 +237,7 @@ export function MessageList({
  *   starts or stops.
  * [AC] chat-prototype-port:AC-15, chat-prototype-port:AC-16, chat-prototype-port:AC-19,
  *   chat-prototype-port:AC-20, chat-prototype-port:AC-24, chat-prototype-port:AC-25,
- *   chat-prototype-port:AC-26
+ *   chat-prototype-port:AC-26, chat-prototype-port:AC-43
  */
 const MessageRow = memo(function MessageRow({
   message,
@@ -270,7 +272,11 @@ const MessageRow = memo(function MessageRow({
       </span>
       <div className={styles.assistantBody}>
         <span className={styles.visuallyHidden}>어시스턴트</span>
-        <TopBadge streamStatus={message.streamStatus} ragEnabled={ragEnabled} />
+        <TopBadge
+          streamStatus={message.streamStatus}
+          ragEnabled={ragEnabled}
+          sources={message.sources}
+        />
         <div
           className={styles.markdown}
           // A live region so a streaming reply's incremental growth is announced to
@@ -380,23 +386,32 @@ function areMessagePropsEqual(
  *   is still arriving there is no resolved RAG-evidence outcome to summarize yet, the same
  *   "not yet known, render nothing/something else" reasoning {@link SourceList} already
  *   applies to `sources === null` during streaming.
- * [Caution] The RAG-ON branch is deliberately `null`, not a guess. Spec §Tech Review AD-5
- *   (2026-08-31 correction) found `hybrid-rag` T15 never built the "RAG 근거 사용됨 · N건" /
- *   "RAG 켜짐 · 근거 문서 0건" badges (P:210/P:351, P:306) -- only {@link SourceList} below
- *   the content exists. Inventing their layout here would not be backed by any AC in this
- *   Spec; this is reported to the coordinator as a gap (AD-5), not fixed silently.
+ * [Caution] T15 (user-approved 2026-09-02, AC-43) built the two RAG-ON badges -- "RAG 근거
+ *   사용됨 · N건" / "RAG 켜짐 · 근거 문서 0건" (P:210/P:351, P:306) -- which Spec §Tech Review
+ *   AD-5 (2026-08-31 correction) had found `hybrid-rag` T15 never built, only reporting the
+ *   gap to the coordinator at the time rather than inventing the layout. `sources` is passed
+ *   through *unmodified* (the array itself, not a count) so this function can reuse {@link
+ *   isValidSourceList} -- the same malformed/`null`/`undefined` classification {@link
+ *   SourceList} already applies to its own `sources` prop, whose four-state shape (`array |
+ *   null | undefined`, plus the implicit "streaming" gate) is documented on that component's
+ *   own [Caution]s. Reusing rather than re-deriving keeps the two render points structurally
+ *   unable to disagree about what counts as "resolved" (AC-43's closing clause).
  * [Caution] `ragEnabled === false` (card T14 finishing work, Medium-1), not `!ragEnabled` --
  *   `ragEnabled === undefined` ("not yet known", see {@link MessageList}'s own [Caution]) must
- *   fall through to the same `null` the not-yet-built RAG-ON branch already returns, not be
- *   silently rendered as the OFF badge.
- * [AC] chat-prototype-port:AC-15, chat-prototype-port:AC-24
+ *   fall through to `null`, the same value the RAG-ON branch also returns for its own
+ *   unresolved cases (AC-43 clauses ①④⑤⑥ below) -- never silently rendered as the OFF badge.
+ * [AC] chat-prototype-port:AC-15, chat-prototype-port:AC-24, chat-prototype-port:AC-43
  */
 function TopBadge({
   streamStatus,
   ragEnabled,
+  sources,
 }: {
   streamStatus: ChatMessage["streamStatus"];
   ragEnabled: boolean | undefined;
+  /** Same prop {@link SourceList} receives, passed through unmodified -- see this function's
+   *  own [Caution] for why an already-derived count would not do. */
+  sources: ChatSource[] | null | undefined;
 }) {
   if (streamStatus === "streaming") {
     return (
@@ -436,9 +451,35 @@ function TopBadge({
     );
   }
 
-  // RAG-ON badges ("RAG 근거 사용됨 · N건" / "RAG 켜짐 · 근거 문서 0건") are not this card's
-  // scope -- see this function's own [Caution]. `ragEnabled === undefined` ("not yet known")
-  // falls through to this same `null` -- see this function's own [Caution] above.
+  if (ragEnabled === true && streamStatus === "done" && isValidSourceList(sources)) {
+    return sources.length > 0 ? (
+      <div className={`${styles.topBadge} ${styles.ragUsedBadge}`}>
+        <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
+          <path
+            d="M1.6 6.3 L4.4 9.1 L10.4 3.1"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+        RAG 근거 사용됨 · {sources.length}건
+      </div>
+    ) : (
+      <div className={`${styles.topBadge} ${styles.ragZeroBadge}`}>
+        <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
+          <circle cx="5.2" cy="5.2" r="3.6" fill="none" stroke="currentColor" strokeWidth="1.4" />
+          <path d="M7.9 7.9 L11 11" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+        RAG 켜짐 · 근거 문서 0건
+      </div>
+    );
+  }
+
+  // undefined `ragEnabled` / `null`-or-`undefined` `sources` / `streamStatus === "error"` all
+  // fall through to null -- AC-43 clauses ①④⑤⑥. Clause ② (OFF) and clause ③ (streaming) are
+  // handled by the earlier branches above, not here.
   return null;
 }
 

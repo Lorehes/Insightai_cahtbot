@@ -141,6 +141,24 @@
   box-shadow: inset 0 0 0 1px var(--app-line);
 }
 
+/* T15 (chat-prototype-port:AC-43) -- P:206-211 "RAG 근거 사용됨 · N건". Same
+   inset-shadow-as-border reasoning as .streamingBadge above; shares its accent palette because
+   the prototype reuses the exact same wash/line/color triple for both (P:210). */
+.ragUsedBadge {
+  background: var(--app-accent-wash);
+  color: var(--app-accent);
+  box-shadow: inset 0 0 0 1px var(--app-accent-line);
+}
+
+/* T15 (chat-prototype-port:AC-43) -- P:301-306 "RAG 켜짐 · 근거 문서 0건". 1.5px inset shadow,
+   not 1px like the other three badges above -- prototype-measured (P:306), distinct from
+   .ragOffBadge's 1px so the "confirmed zero" reading is visually a step stronger than "off". */
+.ragZeroBadge {
+  background: var(--app-bg-sunken);
+  color: var(--app-text);
+  box-shadow: inset 0 0 0 1.5px var(--app-line-strong);
+}
+
 /* P:356. width/margin-left 2px stay literal (a 4px-wide text cursor would read as a thick bar,
    not a caret -- same reasoning as the repo's 1-2px border/outline exception). height
    1.05em/vertical-align -0.18em are relative units the px token scale has no equivalent for. */

@@ -619,4 +619,200 @@ describe("MessageList", () => {
       expect(avatar).toHaveAttribute("aria-hidden", "true");
     });
   });
+
+  // Card T15 (BL-030, user-approved 2026-09-02 -- Spec AC-43 was a reserved number until
+  // today). The 9 cases below are the approval condition's own 절 대조표 made concrete: the
+  // Spec text's 양성 2 (N건/0건) + 부재 6 (①~⑥) = 8 clauses, plus one extra malformed-payload
+  // case (④' -- a distinct trigger for the same `isValidSourceList` gate as ④'s `null`, per
+  // this card's own revert-check plan). Every absence assertion checks *both* RAG-ON badge
+  // strings, not just the one a naive reading of the clause would suggest -- e.g. clause ②
+  // (`ragEnabled === false`) must render neither "...사용됨..." nor "...0건", not merely "not
+  // the one AC-24 already covers". Badge text is re-typed as a literal in every assertion
+  // (Spec §6 판별력 요건), never read off a shared constant.
+  describe("RAG-ON badges (card T15, chat-prototype-port:AC-43)", () => {
+    it("[chat-prototype-port:AC-43] 양성 N건 -- renders 'RAG 근거 사용됨 · N건' when ragEnabled is true, streamStatus is done, and sources resolved to a non-empty valid array, with N matching SourceList's own count", () => {
+      render(
+        <MessageList
+          messages={[
+            assistantMessage("answer", {
+              sources: [
+                { documentId: "d1", filename: "a.pdf", score: 0.03, snippet: "s1", page: 1 },
+                { documentId: "d2", filename: "b.pdf", score: 0.02, snippet: "s2", page: null },
+                { documentId: "d3", filename: "c.pdf", score: 0.01, snippet: "s3", page: 5 },
+              ],
+            }),
+          ]}
+          ragEnabled={true}
+        />,
+      );
+
+      expect(screen.getByText("RAG 근거 사용됨 · 3건")).toBeInTheDocument();
+      // N 동치 단언: SourceList's own "출처" count for the same message must read the same N,
+      // scoped to this row so it cannot accidentally match the badge's own text above.
+      const row = within(screen.getByTestId("message-a1").closest("li")!);
+      expect(row.getByText("3건")).toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-43] 양성 0건 -- renders 'RAG 켜짐 · 근거 문서 0건' when ragEnabled is true, streamStatus is done, and sources resolved to an empty valid array", () => {
+      render(
+        <MessageList messages={[assistantMessage("answer", { sources: [] })]} ragEnabled={true} />,
+      );
+
+      expect(screen.getByText("RAG 켜짐 · 근거 문서 0건")).toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-43] clause ① -- renders 0 of both RAG-ON badges when ragEnabled is undefined (미상), even with a resolved non-empty sources array", () => {
+      render(
+        <MessageList
+          messages={[
+            assistantMessage("answer", {
+              sources: [{ documentId: "d1", filename: "a.pdf", score: 0.02, snippet: "s1", page: null }],
+            }),
+          ]}
+          // ragEnabled omitted entirely -- the real "not yet known" third state (AC-42/AC-44).
+        />,
+      );
+
+      expect(screen.queryByText(/^RAG 근거 사용됨/)).not.toBeInTheDocument();
+      expect(screen.queryByText("RAG 켜짐 · 근거 문서 0건")).not.toBeInTheDocument();
+      // review 2026-09-02 correctness L3: a mount anchor -- without this, an early return or a
+      // thrown-and-swallowed render (e.g. a crash inside `MessageRow` before `TopBadge` is even
+      // reached) would also satisfy the two absence assertions above, passing for the wrong
+      // reason. Proving the row actually mounted closes that gap.
+      expect(screen.getByTestId("message-a1")).toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-43] clause ② -- renders the AC-24 OFF badge and 0 of both RAG-ON badges when ragEnabled is false, even with a resolved non-empty sources array", () => {
+      render(
+        <MessageList
+          messages={[
+            assistantMessage("answer", {
+              sources: [{ documentId: "d1", filename: "a.pdf", score: 0.02, snippet: "s1", page: null }],
+            }),
+          ]}
+          ragEnabled={false}
+        />,
+      );
+
+      expect(screen.getByText("RAG 근거 미사용 · 모델 일반 지식")).toBeInTheDocument();
+      expect(screen.queryByText(/^RAG 근거 사용됨/)).not.toBeInTheDocument();
+      expect(screen.queryByText("RAG 켜짐 · 근거 문서 0건")).not.toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-43] clause ③ -- renders the AC-15 streaming badge and 0 of both RAG-ON badges while the stream is still in progress", () => {
+      render(
+        <MessageList
+          // review 2026-09-02 correctness L2: `sources` is a resolved, valid, non-empty array
+          // here (not `null`) so the streaming-badge absence assertion below has exactly one
+          // possible cause -- the `streamStatus === "streaming"` guard in `TopBadge` -- instead
+          // of two confounded ones (that guard *and* `isValidSourceList` rejecting `null`). The
+          // "partial, no citations yet" framing this test's name still describes is carried by
+          // `streamStatus` alone, matching clause ①'s own convention.
+          messages={[
+            assistantMessage("partial", {
+              streamStatus: "streaming",
+              sources: [{ documentId: "d1", filename: "a.pdf", score: 0.02, snippet: "s1", page: null }],
+            }),
+          ]}
+          ragEnabled={true}
+        />,
+      );
+
+      expect(screen.getByText("생성 중 · 토큰 스트리밍")).toBeInTheDocument();
+      expect(screen.queryByText(/^RAG 근거 사용됨/)).not.toBeInTheDocument();
+      expect(screen.queryByText("RAG 켜짐 · 근거 문서 0건")).not.toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-43] clause ④ -- renders 0 of both RAG-ON badges and the hybrid-rag AC-21 clause ③ delivery-failure text when the stream ended but sources never resolved (null), instead of silently reading it as 0건", () => {
+      render(
+        <MessageList
+          messages={[assistantMessage("answer", { streamStatus: "done", sources: null })]}
+          ragEnabled={true}
+        />,
+      );
+
+      expect(screen.queryByText(/^RAG 근거 사용됨/)).not.toBeInTheDocument();
+      expect(screen.queryByText("RAG 켜짐 · 근거 문서 0건")).not.toBeInTheDocument();
+      expect(screen.getByText("출처를 불러오지 못했습니다.")).toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-43] clause ④' (malformed, same isValidSourceList gate as ④) -- renders 0 of both RAG-ON badges when sources is an array containing a malformed element", () => {
+      render(
+        <MessageList
+          messages={[
+            assistantMessage("answer", {
+              streamStatus: "done",
+              sources: [null] as unknown as ChatMessage["sources"],
+            }),
+          ]}
+          ragEnabled={true}
+        />,
+      );
+
+      expect(screen.queryByText(/^RAG 근거 사용됨/)).not.toBeInTheDocument();
+      expect(screen.queryByText("RAG 켜짐 · 근거 문서 0건")).not.toBeInTheDocument();
+      expect(screen.getByText("출처를 불러오지 못했습니다.")).toBeInTheDocument();
+    });
+
+    // review 2026-09-02 security L1 (follow-up, not Block): clause ④' above only exercises a
+    // bad *element* inside an array (`[null]`) -- that trips `isValidSourceList`'s `.every(...)`
+    // clause. This covers the function's other, untested branch: a `sources` value that is not
+    // an array at all, failing the leading `Array.isArray` check before `.every` ever runs.
+    // Deliberately untagged (not `[chat-prototype-port:AC-43]`) -- AC-43's own text enumerates
+    // clauses ①-⑥ and never lists a non-array payload as one of them, so tagging this would add
+    // a 10th row to a table the Spec's own wording only supports at 9 (security Low-1 in the
+    // T15 review report, same reasoning already applied to clause ④').
+    it("renders 0 of both RAG-ON badges and the AC-21 clause ③ delivery-failure text when sources is not an array at all", () => {
+      render(
+        <MessageList
+          messages={[
+            assistantMessage("answer", {
+              streamStatus: "done",
+              sources: "oops" as unknown as ChatMessage["sources"],
+            }),
+          ]}
+          ragEnabled={true}
+        />,
+      );
+
+      expect(screen.queryByText(/^RAG 근거 사용됨/)).not.toBeInTheDocument();
+      expect(screen.queryByText("RAG 켜짐 · 근거 문서 0건")).not.toBeInTheDocument();
+      expect(screen.getByText("출처를 불러오지 못했습니다.")).toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-43] clause ⑤ -- renders 0 of both RAG-ON badges when sources is undefined (no stream ever tracked for this message, e.g. loaded from history)", () => {
+      render(
+        <MessageList
+          messages={[{ id: "h1", role: "assistant", content: "old answer", streamStatus: "done" }]}
+          ragEnabled={true}
+        />,
+      );
+
+      expect(screen.queryByText(/^RAG 근거 사용됨/)).not.toBeInTheDocument();
+      expect(screen.queryByText("RAG 켜짐 · 근거 문서 0건")).not.toBeInTheDocument();
+      // review 2026-09-02 correctness L3: mount anchor -- clause ⑤ previously had no positive
+      // assertion at all (the review report's own follow-up: "⑤ 는 대응 되돌리기 기록 없음"). This
+      // proves the row actually rendered its content, not merely that neither badge string
+      // happened to appear because nothing rendered.
+      expect(screen.getByText("old answer")).toBeInTheDocument();
+    });
+
+    it("[chat-prototype-port:AC-43] clause ⑥ -- renders the AC-19 error card and 0 of both RAG-ON badges when streamStatus is error, even with a resolved non-empty sources array", () => {
+      render(
+        <MessageList
+          messages={[
+            assistantMessage("partial", {
+              streamStatus: "error",
+              sources: [{ documentId: "d1", filename: "a.pdf", score: 0.02, snippet: "s1", page: null }],
+            }),
+          ]}
+          ragEnabled={true}
+        />,
+      );
+
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(screen.queryByText(/^RAG 근거 사용됨/)).not.toBeInTheDocument();
+      expect(screen.queryByText("RAG 켜짐 · 근거 문서 0건")).not.toBeInTheDocument();
+    });
+  });
 });
