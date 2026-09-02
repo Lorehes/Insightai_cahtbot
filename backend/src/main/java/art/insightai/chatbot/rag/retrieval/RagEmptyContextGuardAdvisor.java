@@ -13,7 +13,11 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
+
+import art.insightai.chatbot.common.lang.Language;
+import art.insightai.chatbot.common.lang.LanguageDetector;
 
 import reactor.core.publisher.Flux;
 
@@ -184,7 +188,7 @@ public final class RagEmptyContextGuardAdvisor implements CallAdvisor, StreamAdv
     @Override
     public ChatClientResponse adviseCall(ChatClientRequest chatClientRequest, CallAdvisorChain callAdvisorChain) {
         if (isEmptyDocumentContext(chatClientRequest.context())) {
-            return notFoundResponse(chatClientRequest.context());
+            return notFoundResponse(chatClientRequest);
         }
         return callAdvisorChain.nextCall(chatClientRequest);
     }
@@ -200,7 +204,7 @@ public final class RagEmptyContextGuardAdvisor implements CallAdvisor, StreamAdv
     public Flux<ChatClientResponse> adviseStream(
             ChatClientRequest chatClientRequest, StreamAdvisorChain streamAdvisorChain) {
         if (isEmptyDocumentContext(chatClientRequest.context())) {
-            return Flux.just(notFoundResponse(chatClientRequest.context()));
+            return Flux.just(notFoundResponse(chatClientRequest));
         }
         return streamAdvisorChain.nextStream(chatClientRequest);
     }
@@ -213,6 +217,35 @@ public final class RagEmptyContextGuardAdvisor implements CallAdvisor, StreamAdv
     private boolean isEmptyDocumentContext(Map<String, Object> context) {
         Object raw = context.get(RetrievalAugmentationAdvisor.DOCUMENT_CONTEXT);
         return raw instanceof List<?> documents && documents.isEmpty();
+    }
+
+    /**
+     * [Purpose] Determines which of ko/en/zh/ja/UNKNOWN the question in {@code chatClientRequest}
+     *   was asked in, resolved to a concrete answer language (never {@code UNKNOWN}) for use by
+     *   {@link #notFoundResponse}.
+     * [Rationale] multilingual-support/AD-8: reads {@link Prompt#getUserMessage()} on {@code
+     *   chatClientRequest.prompt()} (a record accessor -- confirmed by reading spring-ai-client-chat
+     *   2.0.1's {@code ChatClientRequest.java} source, which declares {@code prompt} as a record
+     *   component). {@link Prompt#getUserMessage()} itself -- confirmed by reading spring-ai-model
+     *   2.0.1's {@code Prompt.java:116-128} source (sources jar under
+     *   {@code ~/.m2/repository/org/springframework/ai/spring-ai-model/2.0.1/}) -- returns "the last
+     *   user message in the prompt", or an empty {@code UserMessage("")} "if no user message is
+     *   found". On the zero-document path {@code NonceBoundaryContextAugmenter}'s empty-context
+     *   branch returns the query unchanged (AD-6, AD-8), so this text is the original question, not
+     *   a compressed one, for the one caller ({@link #adviseCall}/{@link #adviseStream}) that reaches
+     *   here.
+     * [Caution] No separate null/blank guard is needed: {@link LanguageDetector#detect(String)}
+     *   already returns {@code UNKNOWN} both for a {@code null} argument and for text whose
+     *   denominator (kana+hangul+han+latin count) is zero -- which is exactly what "no user message"
+     *   (empty {@code UserMessage("")}, {@code getText()} == {@code ""}) and "blank user message"
+     *   produce, since whitespace matches none of the detector's four character classes. {@link
+     *   Language#orDefault()} is AD-7's single UNKNOWN -> KO fallback point; this method returns its
+     *   result, never a raw detector output, so callers never see {@code UNKNOWN}.
+     * [AC] multilingual-support:AC-6
+     */
+    private Language resolveQuestionLanguage(ChatClientRequest chatClientRequest) {
+        String questionText = chatClientRequest.prompt().getUserMessage().getText();
+        return LanguageDetector.detect(questionText).orDefault();
     }
 
     /**
@@ -229,17 +262,19 @@ public final class RagEmptyContextGuardAdvisor implements CallAdvisor, StreamAdv
      *   zero-cost one rather than an unknown-cost one.
      * [AC] multilingual-support:AC-6, multilingual-support:AC-5 (최종)
      */
-    private ChatClientResponse notFoundResponse(Map<String, Object> requestContext) {
+    private ChatClientResponse notFoundResponse(ChatClientRequest chatClientRequest) {
+        Language questionLanguage = resolveQuestionLanguage(chatClientRequest);
+        String answer = RefusalPhrases.of(questionLanguage);
         ChatGenerationMetadata generationMetadata =
                 ChatGenerationMetadata.builder().finishReason(FINISH_REASON).build();
-        Generation generation = new Generation(new AssistantMessage(NOT_FOUND_MESSAGE), generationMetadata);
+        Generation generation = new Generation(new AssistantMessage(answer), generationMetadata);
         ChatResponse chatResponse = ChatResponse.builder()
                 .generations(List.of(generation))
                 .metadata(SYNTHESIZED_RESPONSE_METADATA_KEY, Boolean.TRUE)
                 .build();
         return ChatClientResponse.builder()
                 .chatResponse(chatResponse)
-                .context(requestContext)
+                .context(chatClientRequest.context())
                 .build();
     }
 }
