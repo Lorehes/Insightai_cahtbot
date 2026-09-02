@@ -78,6 +78,40 @@ public final class RagEmptyContextGuardAdvisor implements CallAdvisor, StreamAdv
     public static final String NOT_FOUND_MESSAGE = "제공된 문서에서 찾을 수 없습니다.";
 
     /**
+     * [Purpose] {@code ChatResponse} metadata key this advisor stamps ({@code Boolean.TRUE}) on
+     *   every response it synthesizes, so downstream code can tell "the model was never called"
+     *   apart from "the model was called but its usage summary never arrived".
+     * [Rationale] Before 2026-09-02 the synthesized response carried no usage at all, so {@code
+     *   ChatService} persisted the 'assistant' row with {@code null} token/cost columns -- the
+     *   exact shape the admin usage dashboard counts as "비용 측정 실패" ({@code
+     *   UsageRepository}'s {@code missing_cost_count}). Six of the seven such rows on the demo DB
+     *   turned out to be this path: a genuinely free turn (no OpenRouter request was made) that
+     *   the dashboard nevertheless reported as "실제 청구액이 표시 금액보다 클 수 있음". The user chose
+     *   (2026-09-02, "A안") to record such turns as 0 tokens / 0 cost instead, leaving {@code
+     *   null} to mean only "a paid call whose cost is unknown" (stream cancelled/errored before
+     *   the terminal usage chunk, or the provider omitted {@code cost}). A metadata marker, rather
+     *   than a zero-valued {@code Usage} on the synthesized response, is used because {@code
+     *   ChatService#toChunk} must keep ignoring zero-valued usage: every non-terminal streaming
+     *   chunk from a real model carries prompt=0/completion=0 (S1 spike), so a zero {@code Usage}
+     *   alone cannot distinguish this guard from a mid-stream delta.
+     * [Caution] The marker survives {@link RetrievalAugmentationAdvisor#after} because that method
+     *   rebuilds the response via {@code ChatResponse.builder().from(chatResponse)}, which copies
+     *   every existing metadata entry (read against spring-ai-model 2.0.1's {@code
+     *   ChatResponse.Builder#metadata(ChatResponseMetadata)}). Any future advisor placed between
+     *   this one and {@code ChatService} that rebuilds the response without {@code from(...)} would
+     *   silently drop it -- and every guard turn would fall back to being counted as "비용 측정 실패".
+     */
+    public static final String SYNTHESIZED_RESPONSE_METADATA_KEY = "rag_empty_context_guard_synthesized";
+
+    /**
+     * [Purpose] True when {@code response} is one this advisor synthesized (see {@link
+     *   #SYNTHESIZED_RESPONSE_METADATA_KEY}), i.e. no chat-model call was made for it.
+     */
+    public static boolean isSynthesizedResponse(ChatResponse response) {
+        return Boolean.TRUE.equals(response.getMetadata().get(SYNTHESIZED_RESPONSE_METADATA_KEY));
+    }
+
+    /**
      * [Purpose] Reports whether a complete assistant answer is the fixed "not found" sentence and
      *   nothing else -- the shape {@code NonceBoundaryContextAugmenter}'s prompt instructs the model
      *   to produce when the retrieved context does not contain the answer (D7/T1, 2026-09-01).
@@ -174,13 +208,18 @@ public final class RagEmptyContextGuardAdvisor implements CallAdvisor, StreamAdv
      *   RetrievalAugmentationAdvisor#after} still reads {@code DOCUMENT_CONTEXT} (the empty list)
      *   out of it and copies it onto {@code ChatResponse} metadata -- keeping "sources come from
      *   response metadata" the single contract T11 needs to implement, whether or not this guard
-     *   fired.
+     *   fired. The response metadata additionally carries {@link
+     *   #SYNTHESIZED_RESPONSE_METADATA_KEY} so {@code ChatService} can record the turn as a
+     *   zero-cost one rather than an unknown-cost one.
      */
     private ChatClientResponse notFoundResponse(Map<String, Object> requestContext) {
         ChatGenerationMetadata generationMetadata =
                 ChatGenerationMetadata.builder().finishReason(FINISH_REASON).build();
         Generation generation = new Generation(new AssistantMessage(NOT_FOUND_MESSAGE), generationMetadata);
-        ChatResponse chatResponse = new ChatResponse(List.of(generation));
+        ChatResponse chatResponse = ChatResponse.builder()
+                .generations(List.of(generation))
+                .metadata(SYNTHESIZED_RESPONSE_METADATA_KEY, Boolean.TRUE)
+                .build();
         return ChatClientResponse.builder()
                 .chatResponse(chatResponse)
                 .context(requestContext)

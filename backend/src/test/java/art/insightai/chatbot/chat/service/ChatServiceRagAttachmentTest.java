@@ -307,11 +307,20 @@ class ChatServiceRagAttachmentTest {
         // then: the terminal chunk carries a non-null, explicitly empty sources array
         assertThat(chunks.get(chunks.size() - 1).sources()).isEqualTo(List.of());
 
+        // then (2026-09-02 "A안"): no model call was made, so the terminal chunk's usage is a known
+        //   0 tokens / 0 cost -- not null, which the admin dashboard would count as "비용 측정 실패"
+        assertThat(chunks.get(chunks.size() - 1).usage())
+                .isEqualTo(new ChatChunk.Usage(0, 0, java.math.BigDecimal.ZERO));
+
         // then: [hybrid-rag:AC-12 storage axis] the persisted assistant row's sources JSON is the
-        //   identical empty array
+        //   identical empty array, and its token/cost columns carry the same known zeros
         ArgumentCaptor<Message> assistantMessageCaptor = ArgumentCaptor.forClass(Message.class);
         verify(conversationService).persistAssistantTurn(assistantMessageCaptor.capture());
-        assertThat(assistantMessageCaptor.getValue().getSources()).isEqualTo("[]");
+        Message assistantRow = assistantMessageCaptor.getValue();
+        assertThat(assistantRow.getSources()).isEqualTo("[]");
+        assertThat(assistantRow.getPromptTokens()).isZero();
+        assertThat(assistantRow.getCompletionTokens()).isZero();
+        assertThat(assistantRow.getCostUsd()).isEqualByComparingTo(java.math.BigDecimal.ZERO);
     }
 
     @Test

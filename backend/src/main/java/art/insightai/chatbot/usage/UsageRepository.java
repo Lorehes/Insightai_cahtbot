@@ -26,6 +26,15 @@ import org.springframework.stereotype.Repository;
  *   caller input) with bind parameters for the actual values, so no SQL-injection surface is
  *   introduced (contrast with {@code ParadeDbBm25SearchAdapter}'s [Caution], which guards a
  *   different, user-influenced-value risk that does not apply here).
+ * [Caution] What a {@code null cost_usd} means changed on 2026-09-02 (user decision "A안"): a turn
+ *   the {@code RagEmptyContextGuardAdvisor} short-circuited (no OpenRouter call at all) is now
+ *   persisted as {@code 0/0/0}, not {@code null}, so {@code missing_cost_count} counts only turns
+ *   where a request was actually sent but its cost never arrived — a stream that ended in {@code
+ *   cancelled}/{@code error} before the terminal usage chunk, or a provider response without the
+ *   {@code cost} extension. Rows written before that date were backfilled by hand on the demo DB
+ *   (6 rows, ids 2–12); other environments carrying older data would need the same one-off
+ *   {@code UPDATE} on {@code role='assistant' AND cost_usd IS NULL AND prompt_tokens IS NULL AND
+ *   finish_reason='stop' AND content='제공된 문서에서 찾을 수 없습니다.'}.
  * [Caution] Every query here is scoped to {@code role = 'assistant'} per Tech Review D-8 — the
  *   'user' row of a turn never carries {@code model}/token/cost data (see
  *   {@code chat.domain.Message}'s class-level Caution), so including it would only add zero-valued

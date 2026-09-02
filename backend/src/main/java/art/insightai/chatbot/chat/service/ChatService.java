@@ -107,6 +107,19 @@ public class ChatService {
 
     /** [Purpose] chat Spec Tech Review A-12/OQ-4: title = first user message, truncated. */
     private static final int TITLE_MAX_LENGTH = 30;
+
+    /**
+     * [Purpose] The usage recorded for a turn that never reached OpenRouter — today only the
+     *   {@link RagEmptyContextGuardAdvisor} zero-document short-circuit (2026-09-02 user decision
+     *   "A안"). Tokens and cost are a known 0, not unknown, so this is a real value, never {@code
+     *   null}; {@code messages.cost_usd = 0} for such rows and they are excluded from the admin
+     *   dashboard's "비용 측정 실패" count ({@code UsageRepository}'s {@code cost_usd IS NULL}
+     *   filter).
+     * [Caution] Do not reuse this for any path where a request was actually sent — a cancelled or
+     *   errored stream may already have been billed, and {@code null} (unknown) is the only
+     *   honest value there (see {@link #extractCost}'s [Caution]).
+     */
+    private static final ChatChunk.Usage NO_MODEL_CALL_USAGE = new ChatChunk.Usage(0, 0, BigDecimal.ZERO);
     private static final String TITLE_ELLIPSIS = "…";
 
     private final ChatClient chatClient;
@@ -467,7 +480,9 @@ public class ChatService {
      *   delta chunk carries a zeroed {@code usage} (prompt=0/completion=0/total=0), and the real
      *   token/cost summary lands only on the stream's last {@link ChatResponse}, so {@code
      *   usageHolder} ends up holding exactly that one response's extraction once the stream
-     *   completes.
+     *   completes. A response {@link RagEmptyContextGuardAdvisor} synthesized (no model call)
+     *   carries no usage at all; it is recorded as {@link #NO_MODEL_CALL_USAGE} instead (2026-09-02
+     *   "A안"), so the wire's terminal chunk and the persisted row both say 0 tokens / 0 cost.
      * [Caution] A {@code null} finish reason from {@code result.getMetadata()} is left {@code
      *   null} here, never folded to {@link ChatChunk#FINISH_REASON_UNKNOWN} — every non-terminal
      *   {@link ChatResponse} in a stream legitimately has no finish reason, and folding it here
@@ -553,6 +568,14 @@ public class ChatService {
         Usage responseUsage = response.getMetadata().getUsage();
         if (responseUsage != null && responseUsage.getTotalTokens() > 0) {
             usage = extractUsage(responseUsage);
+            usageHolder.set(usage);
+        } else if (RagEmptyContextGuardAdvisor.isSynthesizedResponse(response)) {
+            // 2026-09-02 user decision ("A안"): a guard-synthesized turn made no OpenRouter call, so
+            // its cost is a known 0, not an unknown. Recording it as such keeps it out of the admin
+            // dashboard's "비용 측정 실패" count, which must mean "paid but amount unknown" only. See
+            // RagEmptyContextGuardAdvisor.SYNTHESIZED_RESPONSE_METADATA_KEY for why a marker is
+            // used instead of a zero-valued Usage on the response (the > 0 gate above must stay).
+            usage = NO_MODEL_CALL_USAGE;
             usageHolder.set(usage);
         }
 
