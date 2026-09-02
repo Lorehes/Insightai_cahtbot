@@ -58,8 +58,20 @@ import reactor.core.publisher.Flux;
  *   whose {@code getOrder()} is numerically greater than {@link #ORDER} has its {@code before()}/
  *   {@code after()} skipped entirely on a zero-document turn -- a future usage-aggregation or
  *   logging advisor positioned after this one would silently miss every "not found" turn unless it
- *   is placed before this advisor in the chain instead.
- * [AC] hybrid-rag:AC-5 (partial — final evidence is hybrid-rag:T11, see Tech Review "AC-5 소유권 분할")
+ *   is placed before this advisor in the chain instead. Spec multilingual-support/AD-8 (T4,
+ *   2026-09-02) extends the synthesized answer beyond a single fixed Korean sentence: {@link
+ *   #notFoundResponse} now resolves the question's language via {@link #resolveQuestionLanguage}
+ *   and answers with {@link RefusalPhrases#of} that language (UNKNOWN falls back to KO through
+ *   {@link Language#orDefault()}, the single fallback point per AD-7), instead of always emitting
+ *   {@link #NOT_FOUND_MESSAGE} verbatim. Clause (2) above ("the answer contains the fixed
+ *   not-found phrase") now reads as "the fixed not-found phrase for the question's language";
+ *   {@link #NOT_FOUND_MESSAGE} itself is untouched -- its value, name, and the fact that it is
+ *   {@link RefusalPhrases}'s KO table entry (AD-5) are exactly what keeps the Korean path
+ *   byte-for-byte unchanged (multilingual-support:AC-5 no-regression). This class still never
+ *   calls the chat model -- language selection only picks which fixed literal to synthesize.
+ * [AC] hybrid-rag:AC-5 (partial — final evidence is hybrid-rag:T11, see Tech Review "AC-5 소유권
+ *   분할"); multilingual-support:AC-6, multilingual-support:AC-5 (최종 — Tech Review "AC 소유권 분할
+ *   표기", INC-003 대응)
  */
 public final class RagEmptyContextGuardAdvisor implements CallAdvisor, StreamAdvisor {
 
@@ -112,9 +124,10 @@ public final class RagEmptyContextGuardAdvisor implements CallAdvisor, StreamAdv
     }
 
     /**
-     * [Purpose] Reports whether a complete assistant answer is the fixed "not found" sentence and
-     *   nothing else -- the shape {@code NonceBoundaryContextAugmenter}'s prompt instructs the model
-     *   to produce when the retrieved context does not contain the answer (D7/T1, 2026-09-01).
+     * [Purpose] Reports whether a complete assistant answer is one of the fixed "not found"
+     *   sentences and nothing else -- the shape {@code NonceBoundaryContextAugmenter}'s prompt
+     *   instructs the model to produce, in the question's language, when the retrieved context does
+     *   not contain the answer (D7/T1, 2026-09-01; language extension multilingual-support/AD-6).
      * [Rationale] The D7 sweep measured that no axis-native score threshold separates the eval
      *   set's "no answer in the corpus" questions from the answerable ones on a single-document
      *   corpus (both BM25 and cosine distributions overlap -- {@code docs/eval/raw-score-
@@ -124,22 +137,21 @@ public final class RagEmptyContextGuardAdvisor implements CallAdvisor, StreamAdv
      *   {@code sources} list to be empty for such an answer -- a refusal accompanied by citations
      *   would present the retrieved chunks as evidence for an answer that was never given. {@code
      *   ChatService} consults this method for the terminal chunk so the wire payload and {@code
-     *   messages.sources} both drop the citations in exactly that case.
-     * [Caution] Deliberately an <b>equality</b> check (surrounding whitespace and the trailing
-     *   period ignored), not {@code contains}: an answer such as "X 는 제공된 문서에서 찾을 수 없습니다.
-     *   다만 Y 는 …" does answer something and must keep its citations. The prompt asks for the
-     *   sentence "and nothing else", so a compliant model produces exactly this shape; a model that
-     *   embeds the sentence in a longer answer simply keeps its sources, which is the safe direction.
+     *   messages.sources} both drop the citations in exactly that case. multilingual-support/AD-5
+     *   keeps this method's name and signature unchanged and moves the comparison itself into
+     *   {@link RefusalPhrases#isRefusal(String)} -- the 9 existing hybrid-rag tag tests (R-B) call
+     *   this method directly, so renaming or relocating it would unsettle AC-5's no-regression proof.
+     * [Caution] Deliberately an <b>equality</b> check (surrounding whitespace and one trailing
+     *   {@code '.'} or {@code '。'} ignored), not {@code contains}: an answer such as "X 는 제공된
+     *   문서에서 찾을 수 없습니다. 다만 Y 는 …" does answer something and must keep its citations. The
+     *   prompt asks for the sentence "and nothing else", so a compliant model produces exactly this
+     *   shape; a model that embeds the sentence in a longer answer simply keeps its sources, which is
+     *   the safe direction. See {@link RefusalPhrases} for the four-language table and the exact
+     *   normalization rule.
+     * [AC] multilingual-support:AC-3, multilingual-support:AC-4, multilingual-support:AC-5 (부분)
      */
     public static boolean isNotFoundAnswer(String answer) {
-        if (answer == null) {
-            return false;
-        }
-        String normalized = answer.strip();
-        if (normalized.endsWith(".")) {
-            normalized = normalized.substring(0, normalized.length() - 1).strip();
-        }
-        return normalized.equals(NOT_FOUND_MESSAGE.substring(0, NOT_FOUND_MESSAGE.length() - 1));
+        return RefusalPhrases.isRefusal(answer);
     }
 
     /**
@@ -163,10 +175,11 @@ public final class RagEmptyContextGuardAdvisor implements CallAdvisor, StreamAdv
     }
 
     /**
-     * [Purpose] Short-circuits to the fixed AC-5 answer when {@link
+     * [Purpose] Short-circuits to the question-language AC-5/AC-6 answer when {@link
      *   RetrievalAugmentationAdvisor#before} populated an empty document list; otherwise defers
      *   unchanged to the rest of the chain (the real model call).
-     * [AC] hybrid-rag:AC-5 (partial — final evidence is hybrid-rag:T11, see Tech Review "AC-5 소유권 분할")
+     * [AC] hybrid-rag:AC-5 (partial — final evidence is hybrid-rag:T11, see Tech Review "AC-5
+     *   소유권 분할"); multilingual-support:AC-6
      */
     @Override
     public ChatClientResponse adviseCall(ChatClientRequest chatClientRequest, CallAdvisorChain callAdvisorChain) {
@@ -178,9 +191,10 @@ public final class RagEmptyContextGuardAdvisor implements CallAdvisor, StreamAdv
 
     /**
      * [Purpose] Streaming counterpart of {@link #adviseCall}: emits a single synthesized chunk
-     *   carrying the fixed AC-5 answer and a non-blank finish reason instead of subscribing to
-     *   the rest of the chain at all.
-     * [AC] hybrid-rag:AC-5 (partial — final evidence is hybrid-rag:T11, see Tech Review "AC-5 소유권 분할")
+     *   carrying the question-language AC-5/AC-6 answer and a non-blank finish reason instead of
+     *   subscribing to the rest of the chain at all.
+     * [AC] hybrid-rag:AC-5 (partial — final evidence is hybrid-rag:T11, see Tech Review "AC-5
+     *   소유권 분할"); multilingual-support:AC-6
      */
     @Override
     public Flux<ChatClientResponse> adviseStream(
@@ -202,15 +216,18 @@ public final class RagEmptyContextGuardAdvisor implements CallAdvisor, StreamAdv
     }
 
     /**
-     * [Purpose] Builds the AC-5 canned response: assistant text is exactly {@link
-     *   #NOT_FOUND_MESSAGE}, {@code finishReason} is {@link #FINISH_REASON} (non-blank, see that
-     *   field's [Rationale]). {@code requestContext} is forwarded unchanged so {@link
-     *   RetrievalAugmentationAdvisor#after} still reads {@code DOCUMENT_CONTEXT} (the empty list)
-     *   out of it and copies it onto {@code ChatResponse} metadata -- keeping "sources come from
-     *   response metadata" the single contract T11 needs to implement, whether or not this guard
-     *   fired. The response metadata additionally carries {@link
+     * [Purpose] Builds the AC-5/AC-6 canned response: assistant text is {@link RefusalPhrases#of}
+     *   the question's language (resolved via {@link #resolveQuestionLanguage}) -- still exactly
+     *   {@link #NOT_FOUND_MESSAGE} when that language is KO, since {@link RefusalPhrases}'s KO table
+     *   entry is that same constant (AD-5) -- {@code finishReason} is {@link #FINISH_REASON}
+     *   (non-blank, see that field's [Rationale]). {@code chatClientRequest.context()} is forwarded
+     *   unchanged so {@link RetrievalAugmentationAdvisor#after} still reads {@code DOCUMENT_CONTEXT}
+     *   (the empty list) out of it and copies it onto {@code ChatResponse} metadata -- keeping
+     *   "sources come from response metadata" the single contract T11 needs to implement, whether or
+     *   not this guard fired. The response metadata additionally carries {@link
      *   #SYNTHESIZED_RESPONSE_METADATA_KEY} so {@code ChatService} can record the turn as a
      *   zero-cost one rather than an unknown-cost one.
+     * [AC] multilingual-support:AC-6, multilingual-support:AC-5 (최종)
      */
     private ChatClientResponse notFoundResponse(Map<String, Object> requestContext) {
         ChatGenerationMetadata generationMetadata =
