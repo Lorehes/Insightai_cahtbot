@@ -239,6 +239,16 @@ app:
       # ("최근 20턴 고정"). MessageChatMemoryRepository.findByConversationId 가 이 값만큼만 최근
       # messages 행을 잘라 LLM 프롬프트에 싣는다 (Tech Review A-5, T10).
       max-messages: 40
+    # 답변 생성 호출 1건의 전체 시간 상한 (연결 + 스트리밍 본문을 끝까지 읽는 시간 포함).
+    # 2026-09-02 사용자 보고: Spring AI 2.0.1 의 OpenAiChatOptions 는 timeout 이 null 이면 생성자에서
+    # 60초(AbstractOpenAiOptions.DEFAULT_TIMEOUT)를 채우고, 그 값이 OkHttp callTimeout/readTimeout 에
+    # 그대로 적용된다. ChatService 가 요청마다 옵션을 새로 만들기 때문에 spring.ai.openai.timeout 과
+    # 무관하게 항상 60초가 나갔고, 이 사실은 설정 어디에도 드러나지 않았다. 빠른 모델만 쓰던 동안은
+    # 걸린 적이 없다가 같은 날 카탈로그에 추론 모델(qwen/qwen3.8-flash)이 들어오면서 드러났다 --
+    # 실측 실패 5건 중 4건이 61~66초에 finish_reason=error·내용 0자로 끝났고, 성공 턴은 최대 41초
+    # (completion 3,925 토큰)였다. 5분은 관측된 어떤 턴보다 넉넉히 위에 두려는 상한이지 튜닝값이 아니다.
+    # 0 이나 음수는 기동 시 거부된다 (OkHttp 는 0 을 "무제한"으로 해석하므로).
+    stream-timeout: 5m
 
 logging:
   level:

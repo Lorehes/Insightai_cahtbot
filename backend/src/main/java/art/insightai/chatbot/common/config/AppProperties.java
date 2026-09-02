@@ -314,10 +314,35 @@ public record AppProperties(
      *   system prompt) without a breaking rename, mirroring how {@link Models} already leaves
      *   {@link Models.ModelEntry} nested rather than flattening its two fields into {@code
      *   AppProperties} directly.
+     * [Rationale] {@code streamTimeout} (2026-09-02, user-reported defect) bounds one answer-
+     *   generation call to OpenRouter end to end -- connect, and reading the whole streamed body
+     *   until the terminal chunk. Spring AI 2.0.1's {@code OpenAiChatOptions} fills a {@code null}
+     *   timeout with {@code AbstractOpenAiOptions.DEFAULT_TIMEOUT} (60s) at construction time, and
+     *   {@code SpringAiOpenAiHttpClient} applies that value as OkHttp's {@code callTimeout} (whole
+     *   call, streaming body included) as well as {@code readTimeout}. Because {@code
+     *   ChatService#streamReply} builds a fresh {@code OpenAiChatOptions} per request, that 60s
+     *   default was always sent regardless of {@code spring.ai.openai.timeout}, and it was never
+     *   visible in this project's own configuration. It went unnoticed while the catalog held only
+     *   fast models; the 2026-09-02 catalog swap added {@code qwen/qwen3.8-flash}, a reasoning
+     *   model whose hidden thinking pushes some turns past 60s (measured: 4 of 5 failures ended at
+     *   61-66s with {@code finish_reason=error} and empty content, successes up to 41s / 3,925
+     *   completion tokens). 5 minutes is a generous ceiling chosen to stay above any observed turn,
+     *   not a tuned value; the stream can still be cancelled by the user at any time.
+     * [Caution] The compact constructor rejects a zero or negative {@code streamTimeout} at
+     *   startup -- OkHttp treats {@code 0} as "no timeout", which would silently reintroduce the
+     *   unbounded-request-thread problem {@code Rerank.readTimeout} exists to prevent.
      */
     public record Chat(
-            @DefaultValue Memory memory
+            @DefaultValue Memory memory,
+            @DefaultValue("5m") Duration streamTimeout
     ) {
+        public Chat {
+            if (streamTimeout == null || streamTimeout.isZero() || streamTimeout.isNegative()) {
+                throw new IllegalStateException(
+                        "app.chat.stream-timeout must be a positive duration, got: " + streamTimeout);
+            }
+        }
+
         /**
          * [Purpose] How many of the most-recent {@code messages} rows (user+assistant combined)
          *   {@code MessageChatMemoryRepository} feeds into the LLM prompt for multi-turn context.

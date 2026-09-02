@@ -100,7 +100,8 @@ public final class TestAppPropertiesFactory {
                 List.of("text/plain"), 2000, 500, 100, Duration.ofSeconds(30));
         private AppProperties.Session session = new AppProperties.Session(1000, 50, 200);
         private AppProperties.Models models = validModels();
-        private AppProperties.Chat chat = new AppProperties.Chat(new AppProperties.Chat.Memory(40));
+        private AppProperties.Chat chat =
+                new AppProperties.Chat(new AppProperties.Chat.Memory(40), Duration.ofMinutes(5));
 
         private Builder() {
         }

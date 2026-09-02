@@ -33,6 +33,7 @@ import reactor.core.publisher.SignalType;
 import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -130,6 +131,16 @@ public class ChatService {
     private final ObjectMapper objectMapper;
 
     /**
+     * [Purpose] {@code app.chat.stream-timeout} -- the end-to-end ceiling for one answer-generation
+     *   call, applied to every request's {@code OpenAiChatOptions} in {@link #streamReply(Conversation,
+     *   String, String, Integer)}.
+     * [Rationale] See {@link AppProperties.Chat}'s own [Rationale]: without an explicit value,
+     *   Spring AI 2.0.1 fills the per-request options with a 60s default that OkHttp enforces as
+     *   {@code callTimeout} over the whole streamed body, which cut off reasoning models mid-think.
+     */
+    private final Duration streamTimeout;
+
+    /**
      * [Purpose] Wires the six collaborators {@link #streamReply(Conversation, String, String, Integer)} needs: the fluent LLM client,
      *   the transactional persistence delegate, (T10) the multi-turn history reader, (hybrid-rag
      *   T10) the RAG advisor pair conditionally attached per request, and (hybrid-rag T11) the
@@ -183,6 +194,7 @@ public class ChatService {
         this.ragAdvisorPair = ragAdvisorPair;
         this.sourceRefMapper = sourceRefMapper;
         this.objectMapper = objectMapper;
+        this.streamTimeout = appProperties.chat().streamTimeout();
     }
 
     /**
@@ -418,7 +430,13 @@ public class ChatService {
                 // standard `include_usage` option (already defaulted on for streaming by
                 // OpenAiChatModel.createRequest()) gets prompt/completion token counts without it,
                 // but never `cost` (chat:AC-32, chat:AC-33).
-                .extraBody(Map.of("usage", Map.of("include", true)));
+                .extraBody(Map.of("usage", Map.of("include", true)))
+                // 2026-09-02 (user-reported defect): must be explicit. OpenAiChatOptions' constructor
+                // replaces a null timeout with Spring AI's 60s default, and SpringAiOpenAiHttpClient
+                // applies it as OkHttp callTimeout -- the whole call including the streamed body --
+                // so a reasoning model that thinks for more than 60s was cut off with an error and no
+                // content. See AppProperties.Chat's [Rationale] for the measured evidence.
+                .timeout(streamTimeout);
         if (maxTokensOverride != null) {
             optionsBuilder = optionsBuilder.maxTokens(maxTokensOverride);
         }

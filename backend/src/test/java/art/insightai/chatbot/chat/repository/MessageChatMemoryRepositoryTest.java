@@ -83,7 +83,7 @@ class MessageChatMemoryRepositoryTest {
         //   its own (confirmed by reading spring-ai-model-2.0.1-sources.jar directly -- see class
         //   [Rationale]), so this repository must be the one place that trims
         AppProperties twoMessageWindow = TestAppPropertiesFactory.builder()
-                .chat(new AppProperties.Chat(new AppProperties.Chat.Memory(2)))
+                .chat(new AppProperties.Chat(new AppProperties.Chat.Memory(2), java.time.Duration.ofMinutes(5)))
                 .build();
         MessageChatMemoryRepository repository = new MessageChatMemoryRepository(
                 conversationRepository, messageRepository, twoMessageWindow);
