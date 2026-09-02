@@ -1,0 +1,43 @@
+# Test fixture only -- fictional placeholder content, NOT the real company eval-set.
+# multilingual-support T8 (AC-8): same shape as the T8 block appended to
+# {DOC_ROOT}/docs/eval/eval-set.yaml (lang: en|zh|ja on new items, none on ko items), reduced to
+# 1 found + 1 not-found per language so EvalSetLoader's lang handling (AC-7 default ko, AC-8 en/zh/ja
+# present and valid) can be verified in CI without the R4-gated real file.
+
+# ko -- no lang key on purpose (AC-7: missing lang loads as ko)
+- question: "이 픽스처 챗봇은 언제 만들어졌어?"
+  expect_source: "dummy-fixture.pdf"
+  expect_contains: ["2026"]
+
+- question: "이 픽스처 챗봇이 좋아하는 음식은?"
+  expect: NOT_FOUND
+
+# en
+- question: "When was this fixture chatbot created?"
+  lang: en
+  expect_source: "dummy-fixture.pdf"
+  expect_contains: ["2026"]
+
+- question: "What is this fixture chatbot's favorite food?"
+  lang: en
+  expect: NOT_FOUND
+
+# zh
+- question: "这个测试用聊天机器人是什么时候创建的？"
+  lang: zh
+  expect_source: "dummy-fixture.pdf"
+  expect_contains: ["2026"]
+
+- question: "这个测试用聊天机器人最喜欢的食物是什么？"
+  lang: zh
+  expect: NOT_FOUND
+
+# ja
+- question: "このフィクスチャ用チャットボットはいつ作られましたか？"
+  lang: ja
+  expect_source: "dummy-fixture.pdf"
+  expect_contains: ["2026"]
+
+- question: "このフィクスチャ用チャットボットの好きな食べ物は何ですか？"
+  lang: ja
+  expect: NOT_FOUND
