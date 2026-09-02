@@ -1,5 +1,7 @@
 package art.insightai.chatbot.eval.judge;
 
+import java.util.List;
+
 import art.insightai.chatbot.eval.evalset.EvalCase;
 
 /**
@@ -13,36 +15,66 @@ import art.insightai.chatbot.eval.evalset.EvalCase;
  *   after whitespace is removed from both (D-3 revised 2026-09-01, BL-043 (a) -- the original
  *   "no normalization" rule mis-scored "17 명" against "17명"; see {@link #stripWhitespace});
  *   {@code source_correct} = {@code expectSource} is among
- *   {@code sourceFilenames}; {@code not_found_correct} = the refusal phrase is present AND
- *   {@code sourceFilenames} is empty; {@code hallucination} = the refusal phrase is absent.
+ *   {@code sourceFilenames}; {@code not_found_correct} = any refusal phrase is present AND
+ *   {@code sourceFilenames} is empty; {@code hallucination} = no refusal phrase is present.
  *   The refusal-phrase match itself is deterministic, not an LLM-as-judge call: hybrid-rag
- *   Spec D-T8 already commits the application (not the LLM) to emitting this exact fixed string
- *   whenever the zero-result "not found" path is taken (hybrid-rag:AC-5), so a plain substring
- *   check on {@link #REJECTION_PHRASE} is reliable — there is no free-form LLM wording to guess
+ *   Spec D-T8 already commits the application (not the LLM) to emitting one of these exact
+ *   fixed strings whenever the zero-result "not found" path is taken (hybrid-rag:AC-5), and
+ *   multilingual-support AD-4 extends that fixed set to ko/en/zh/ja, so a plain substring check
+ *   against {@link #REJECTION_PHRASES} is reliable — there is no free-form LLM wording to guess
  *   at. This resolves Spec OQ-4 (AND of phrase match + empty sources) without inventing a
  *   keyword list.
- * [Caution] {@link #REJECTION_PHRASE} is an independent copy of the refusal string hybrid-rag
- *   card T9 will actually emit, not a compile-time dependency (D-2 keeps eval isolated from
- *   hybrid-rag on purpose). When T9 is implemented, its emitted string MUST be diffed against
- *   this constant by hand — a single character mismatch makes every NOT_FOUND case silently
- *   misjudge {@code hallucination=true} (the refusal-phrase check in
- *   {@link #judgeNotFound(EvalCase.NotFound, EvalResponse)} would never match).
+ * [Caution] {@link #REJECTION_PHRASES} is an independent copy of the refusal strings
+ *   rag/retrieval's {@code RefusalPhrases} table actually emits, not a compile-time dependency
+ *   (multilingual-support AD-3 keeps eval isolated from the rag/retrieval module on purpose —
+ *   no import of {@code RefusalPhrases} here). Each entry MUST be re-verified by hand against
+ *   {@code RefusalPhrases#all()} whenever either table changes — a single character mismatch
+ *   makes every NOT_FOUND case in that language silently misjudge {@code hallucination=true}
+ *   (the refusal-phrase check in {@link #judgeNotFound(EvalCase.NotFound, EvalResponse)} would
+ *   never match). No automated drift-detection test exists for this pair yet — adding one is
+ *   left to a future decision, not enforced by this class.
  * [AC] eval-usage-dashboard:AC-3
  * [AC] eval-usage-dashboard:AC-4
  * [AC] eval-usage-dashboard:AC-5
  * [AC] eval-usage-dashboard:AC-6a
+ * [AC] multilingual-support:AC-9
  */
 public final class EvalJudge {
 
     /**
      * [Rationale] Tech Review D-3: hybrid-rag Spec AC-5's fixed refusal string, trailing period
-     *   excluded from the match per D-3's explicit note.
-     * [Caution] This is an independent copy, not sourced from hybrid-rag code (D-2 forbids a
-     *   compile-time dependency on the hybrid-rag module). It must be re-verified against the
-     *   actual string hybrid-rag T9 emits once T9 is implemented — a one-character drift makes
-     *   every NOT_FOUND case silently misjudge {@code hallucination=true}.
+     *   excluded from the match per D-3's explicit note. Kept as a standalone constant (rather
+     *   than folded away) because it is the ko entry of {@link #REJECTION_PHRASES} and existing
+     *   call sites/comments outside this file refer to it by name.
+     * [Caution] This is an independent copy, not sourced from hybrid-rag/rag-retrieval code
+     *   (multilingual-support AD-3 forbids a compile-time dependency on that module). It must be
+     *   re-verified against the actual string that module emits whenever it changes — a
+     *   one-character drift makes every NOT_FOUND case silently misjudge
+     *   {@code hallucination=true}.
      */
     static final String REJECTION_PHRASE = "제공된 문서에서 찾을 수 없습니다";
+
+    /**
+     * [Purpose] The four ko/en/zh/ja refusal sentences this judge treats as "the model refused
+     *   to answer", each with its terminal punctuation (Korean/English {@code '.'}, Chinese/
+     *   Japanese {@code '。'}) already stripped so the {@code contains} check in
+     *   {@link #judgeNotFound(EvalCase.NotFound, EvalResponse)} matches regardless of whether the
+     *   model actually terminates the sentence.
+     * [Rationale] multilingual-support AD-4 (user-confirmed 2026-09-02, gate 2) fixes these four
+     *   literal sentences. multilingual-support AD-3 requires this to be an independent copy
+     *   inside {@code eval} rather than an import of rag/retrieval's {@code RefusalPhrases} table,
+     *   so the eval module stays decoupled from the production retrieval module it is scoring.
+     * [Caution] Must match {@code RefusalPhrases#all()} character-for-character except for the
+     *   terminal punctuation (deliberately stripped here, present there). A drift-detection test
+     *   that asserts this equality does not exist yet in this codebase; keeping the two tables in
+     *   sync by hand is the caller's responsibility until one is added.
+     * [AC] multilingual-support:AC-9
+     */
+    static final List<String> REJECTION_PHRASES = List.of(
+            REJECTION_PHRASE,
+            "The answer is not in the provided documents",
+            "在提供的文档中找不到答案",
+            "提供された文書には見つかりませんでした");
 
     private EvalJudge() {
     }
@@ -90,11 +122,12 @@ public final class EvalJudge {
 
     /**
      * [Purpose] AC-5/AC-6: scores a "not-found" question per the D-3 truth table, including the
-     *   uncounted third state (refusal phrase present but {@code sourceFilenames} non-empty),
+     *   uncounted third state (a refusal phrase present but {@code sourceFilenames} non-empty),
      *   where neither {@code notFoundCorrect} nor {@code hallucination} is set.
+     * [AC] multilingual-support:AC-9
      */
     public static JudgeResult.NotFound judgeNotFound(EvalCase.NotFound evalCase, EvalResponse response) {
-        boolean refused = response.answer().contains(REJECTION_PHRASE);
+        boolean refused = REJECTION_PHRASES.stream().anyMatch(response.answer()::contains);
         boolean sourcesEmpty = response.sourceFilenames().isEmpty();
         boolean notFoundCorrect = refused && sourcesEmpty;
         boolean hallucination = !refused;
