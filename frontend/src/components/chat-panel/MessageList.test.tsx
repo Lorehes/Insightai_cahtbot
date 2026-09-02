@@ -42,9 +42,9 @@ describe("MessageList", () => {
 
       // Spec §6 discriminating-power requirement 4 -- literals re-typed here, not read off a
       // component-exported constant, so a wrong constant value would still fail this test.
-      expect(screen.getByRole("button", { name: "연차 이월 규정이 어떻게 되나요?" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "법인카드 사용 한도는?" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "보안 교육 이수 기한 알려줘" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "회사 주소가 어디인가요?" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "회사 전화번호를 알려줘" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "점심시간은 몇 시부터인가요?" })).toBeInTheDocument();
     });
 
     it("calls onExampleSelect with a clicked chip's exact, untransformed label", async () => {
@@ -52,17 +52,17 @@ describe("MessageList", () => {
       const onExampleSelect = jest.fn();
       render(<MessageList messages={[]} onExampleSelect={onExampleSelect} />);
 
-      await user.click(screen.getByRole("button", { name: "법인카드 사용 한도는?" }));
+      await user.click(screen.getByRole("button", { name: "회사 전화번호를 알려줘" }));
 
       expect(onExampleSelect).toHaveBeenCalledTimes(1);
-      expect(onExampleSelect).toHaveBeenCalledWith("법인카드 사용 한도는?");
+      expect(onExampleSelect).toHaveBeenCalledWith("회사 전화번호를 알려줘");
     });
 
     it("does not throw when a chip is clicked and onExampleSelect is omitted", async () => {
       const user = userEvent.setup();
       render(<MessageList messages={[]} />);
 
-      await user.click(screen.getByRole("button", { name: "보안 교육 이수 기한 알려줘" }));
+      await user.click(screen.getByRole("button", { name: "점심시간은 몇 시부터인가요?" }));
       // No assertion beyond "did not throw" -- `onExampleSelect` is optional (`?.()` call).
     });
   });

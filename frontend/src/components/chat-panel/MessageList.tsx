@@ -47,15 +47,17 @@ export interface ChatMessage {
   ragEnabledAtSend?: boolean;
 }
 
-/** Fixed example-question chip labels for the empty-transcript state (Spec `P:158-160`,
- *  chat-prototype-port:AC-13). Kept private to this module -- AC-14's own test deliberately
- *  re-types these strings as literals rather than importing this constant (Spec §6
- *  discriminating-power requirement 4: comparing against the same constant a bug also uses
- *  would let a wrong value pass). */
+/** Fixed example-question chip labels for the empty-transcript state (chat-prototype-port:AC-13).
+ *  Kept private to this module -- AC-14's own test deliberately re-types these strings as
+ *  literals rather than importing this constant (Spec §6 discriminating-power requirement 4:
+ *  comparing against the same constant a bug also uses would let a wrong value pass).
+ *  Replaced 2026-09-02 (user request) with publicly-shareable questions -- the original
+ *  `P:158-160` wording (연차 이월/법인카드/보안 교육) is now stale; Spec AC-13's literal text and
+ *  its `P:158-160` note (문구 교체는 값의 창작이므로 하지 않는다) need a /dev-doc-sync pass. */
 const EXAMPLE_QUESTIONS = [
-  "연차 이월 규정이 어떻게 되나요?",
-  "법인카드 사용 한도는?",
-  "보안 교육 이수 기한 알려줘",
+  "회사 주소가 어디인가요?",
+  "회사 전화번호를 알려줘",
+  "점심시간은 몇 시부터인가요?",
 ] as const;
 
 /**

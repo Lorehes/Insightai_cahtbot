@@ -391,12 +391,12 @@ describe("ChatPanel", () => {
 
     // Spec §6 discriminating-power requirement 4 -- literal re-typed here, not read off a
     // component-exported constant.
-    await user.click(screen.getByRole("button", { name: "연차 이월 규정이 어떻게 되나요?" }));
+    await user.click(screen.getByRole("button", { name: "회사 주소가 어디인가요?" }));
 
     await waitFor(() => expect(mockedStreamAssistantReply).toHaveBeenCalledTimes(1));
     // Character-for-character equality against the raw second positional argument, not a
     // substring/regex match (Spec §6 판별력 요건: "정규화 후 비교 금지").
-    expect(mockedStreamAssistantReply.mock.calls[0][1]).toBe("연차 이월 규정이 어떻게 되나요?");
+    expect(mockedStreamAssistantReply.mock.calls[0][1]).toBe("회사 주소가 어디인가요?");
   });
 
   it("[chat:AC-39] forwards the given model prop to streamAssistantReply when sending", async () => {
