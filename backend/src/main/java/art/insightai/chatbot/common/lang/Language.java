@@ -1,5 +1,7 @@
 package art.insightai.chatbot.common.lang;
 
+import java.util.Optional;
+
 /**
  * [Purpose] The four supported answer/question languages plus UNKNOWN, the result
  *   {@link LanguageDetector#detect(String)} returns when it cannot decide.
@@ -26,6 +28,28 @@ public enum Language {
      */
     public Language orDefault() {
         return this == UNKNOWN ? KO : this;
+    }
+
+    /**
+     * [Purpose] Maps the eval-set YAML's lowercase {@code lang} code (exactly {@code ko}/{@code
+     *   en}/{@code zh}/{@code ja}) to its enum constant; any other input yields empty.
+     * [Rationale] AD-9 shares this enum between the eval-set schema and {@link LanguageDetector}
+     *   so AC-11's question-language vs. answer-language comparison never needs a conversion step.
+     *   {@code UNKNOWN} has no code on purpose — it is a detection outcome, not a value an eval-set
+     *   item may declare.
+     * [Caution] Only the exact lowercase codes match. {@link art.insightai.chatbot.eval.evalset.EvalSetLoader}
+     *   relies on this to reject uppercase (e.g. {@code KO}) and {@code unknown} as validation
+     *   failures rather than silently accepting them.
+     * [AC] multilingual-support:AC-7
+     */
+    public static Optional<Language> fromCode(String code) {
+        return switch (code) {
+            case "ko" -> Optional.of(KO);
+            case "en" -> Optional.of(EN);
+            case "zh" -> Optional.of(ZH);
+            case "ja" -> Optional.of(JA);
+            default -> Optional.empty();
+        };
     }
 
 }

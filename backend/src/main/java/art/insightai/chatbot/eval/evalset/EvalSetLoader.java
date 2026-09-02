@@ -1,5 +1,6 @@
 package art.insightai.chatbot.eval.evalset;
 
+import art.insightai.chatbot.common.lang.Language;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
@@ -29,6 +30,7 @@ public final class EvalSetLoader {
     private static final String KEY_EXPECT_SOURCE = "expect_source";
     private static final String KEY_EXPECT_CONTAINS = "expect_contains";
     private static final String KEY_EXPECT = "expect";
+    private static final String KEY_LANG = "lang";
     private static final String NOT_FOUND_MARKER = "NOT_FOUND";
 
     private EvalSetLoader() {
@@ -87,6 +89,7 @@ public final class EvalSetLoader {
         Object expect = rawMap.get(KEY_EXPECT);
         Object expectSource = rawMap.get(KEY_EXPECT_SOURCE);
         Object expectContains = rawMap.get(KEY_EXPECT_CONTAINS);
+        Language lang = resolveLang(index, question, rawMap.get(KEY_LANG));
 
         if (expect != null) {
             if (!NOT_FOUND_MARKER.equals(String.valueOf(expect))) {
@@ -100,7 +103,7 @@ public final class EvalSetLoader {
                                 + "'expect_source'/'expect_contains' — an item must use exactly one of the two "
                                 + "judgement modes");
             }
-            return new EvalCase.NotFound(question);
+            return new EvalCase.NotFound(question, lang);
         }
 
         if (expectSource != null || expectContains != null) {
@@ -111,12 +114,32 @@ public final class EvalSetLoader {
                         "eval-set item #" + index + " ('" + question + "') requires both a non-blank "
                                 + "'expect_source' and a non-empty 'expect_contains' list");
             }
-            return new EvalCase.Found(question, source, contains);
+            return new EvalCase.Found(question, source, contains, lang);
         }
 
         throw new EvalSetValidationException(
                 "eval-set item #" + index + " ('" + question + "') has none of 'expect_source'/'expect_contains'/"
                         + "'expect' — every item must declare one of the two judgement modes");
+    }
+
+    /**
+     * [Purpose] Resolves the optional {@code lang} key to a {@link Language}: absent means
+     *   {@link Language#KO} (AC-7); present must be exactly one of the lowercase codes
+     *   {@link Language#fromCode(String)} accepts.
+     * [Rationale] AD-9 excludes {@code UNKNOWN} from the valid declared values — it is a
+     *   detection outcome, not something an eval-set author may write — so any non-matching
+     *   value (wrong case, {@code unknown}, blank, non-string) fails the same way an unsupported
+     *   'expect' value does: a loud {@link EvalSetValidationException} naming the item index.
+     * [AC] multilingual-support:AC-7
+     */
+    private static Language resolveLang(int index, String question, Object rawLang) {
+        if (rawLang == null) {
+            return Language.KO;
+        }
+        String code = asString(rawLang);
+        return Language.fromCode(code).orElseThrow(() -> new EvalSetValidationException(
+                "eval-set item #" + index + " ('" + question + "') has unsupported 'lang' value: "
+                        + rawLang + " (expected one of 'ko', 'en', 'zh', 'ja')"));
     }
 
     private static String asString(Object value) {
