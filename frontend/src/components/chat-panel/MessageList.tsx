@@ -459,7 +459,11 @@ function TopBadge({
   }
 
   if (ragEnabledAtSend === true && streamStatus === "done" && isValidSourceList(sources)) {
-    return sources.length > 0 ? (
+    // User decision 2026-09-02: N counts distinct *documents* (the same fold `SourceList`'s
+    // header/chips use, via the shared `uniqueSourceDocuments`), not retrieved chunks -- the
+    // badge and the citation area must keep quoting the same number (AC-43's closing clause).
+    const documentCount = uniqueSourceDocuments(sources).length;
+    return documentCount > 0 ? (
       <div className={`${styles.topBadge} ${styles.ragUsedBadge}`}>
         <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
           <path
@@ -471,7 +475,7 @@ function TopBadge({
             strokeLinejoin="round"
           />
         </svg>
-        RAG 근거 사용됨 · {sources.length}건
+        RAG 근거 사용됨 · {documentCount}건
       </div>
     ) : (
       <div className={`${styles.topBadge} ${styles.ragZeroBadge}`}>
@@ -493,9 +497,13 @@ function TopBadge({
 /**
  * [Purpose] Renders the citation area under an assistant reply -- hybrid-rag Spec `AC-18`
  *   (1+ sources), `AC-20` (confirmed-empty sources), and `AC-21`'s three-clause state model
- *   (streaming / resolved / stream-ended-but-never-resolved). Gated first, ahead of all of
- *   that, by `chat-prototype-port:AC-46`: a conversation with RAG OFF renders no citation area
- *   at all, regardless of `streamStatus`/`sources`.
+ *   (streaming / resolved / stream-ended-but-never-resolved). Since 2026-09-02 (user decision)
+ *   the resolved case lists distinct source *documents* -- deduped by `documentId`, filename
+ *   only, no page suffix -- instead of one chip per retrieved chunk; the header count and
+ *   `TopBadge`'s `N건` both quote that folded number via the shared
+ *   {@link uniqueSourceDocuments}. Gated first, ahead of all of that, by
+ *   `chat-prototype-port:AC-46`: an answer sent with RAG OFF renders no citation area at all,
+ *   regardless of `streamStatus`/`sources`.
  * [Rationale] AC-46's gate exists because OFF means "never searched", which must not read as
  *   "searched and found nothing" -- `AC-20`'s confirmed-empty box below (「이 답변에는 근거 문서가
  *   없습니다」) is reserved for a RAG-ON answer that actually ran retrieval and got zero results;
@@ -573,9 +581,10 @@ function SourceList({
   if (!isValidSourceList(sources)) {
     // Covers `null` (clause (3), BL-019: stream ended, sources never arrived), any non-array
     // value, and an array containing a malformed element (review 2026-08-31 round-2 security
-    // Low-1: a single bad element, e.g. `[null]`, must not crash `formatSourceLabel` mid-map --
-    // rejecting the whole value here keeps AC-18's "rendered count matches sources.length"
-    // guarantee intact for well-formed data instead of silently dropping just the bad element).
+    // Low-1: a single bad element, e.g. `[null]`, must not crash `uniqueSourceDocuments` or
+    // the chip renderer mid-map -- rejecting the whole value here keeps the "rendered chips
+    // match the distinct-document fold" guarantee intact for well-formed data instead of
+    // silently dropping just the bad element).
     return (
       <div className={styles.sourcesFailed}>
         <span aria-hidden="true">⚠</span> 출처를 불러오지 못했습니다.
@@ -583,31 +592,39 @@ function SourceList({
     );
   }
 
+  // User decision 2026-09-02: the citation area lists distinct source *documents* (filename
+  // only, no page suffix), not one chip per retrieved chunk. The backend still sends one
+  // Source per chunk (`ChatService#resolveSources`), so before this fold the same document
+  // rendered once per retrieved page (observed: 5 chips "…pdf p.22 / p.3 / p.4 / p.1 / p.2"
+  // for a single document). Supersedes hybrid-rag AC-19's "<filename> p.<page>" display rule
+  // and AC-18's chip-count-equals-`sources.length` reading (Spec amendment pending).
+  const documents = uniqueSourceDocuments(sources);
+
   return (
     <div className={styles.sources}>
       <div className={styles.sourcesHeader}>
         <span className={styles.sourcesLabel}>출처</span>
-        <span className={styles.sourcesCount}>{sources.length}건</span>
+        <span className={styles.sourcesCount}>{documents.length}건</span>
       </div>
-      {sources.length === 0 ? (
+      {documents.length === 0 ? (
         <div className={styles.sourcesEmpty}>
           <span aria-hidden="true">✕</span> 이 답변에는 근거 문서가 없습니다.
         </div>
       ) : (
         <ul className={styles.sourceItems}>
-          {sources.map((source, index) => (
-            // Keyed on more than `documentId` alone: the backend maps one Source per
-            // *retrieved chunk*, not per document (`ChatService#resolveSources`), so two
-            // sources from the same document (different pages) are a normal result and would
-            // otherwise collide (review 2026-08-31 Medium-2).
-            <li key={`${source.documentId}-${source.page ?? "na"}-${index}`} className={styles.sourceItem}>
+          {documents.map((source) => (
+            // `documentId` alone is a valid key now: `uniqueSourceDocuments` guarantees one
+            // entry per document. (The pre-fold list needed page+index too -- review
+            // 2026-08-31 Medium-2 -- because one document legitimately arrived once per
+            // retrieved page.)
+            <li key={source.documentId} className={styles.sourceItem}>
               {/* SourceChip's document glyph (decoded blob 2b98462d) -- decorative, contributes
-                  no text, so the item's text content is still exactly `formatSourceLabel`. */}
+                  no text, so the item's text content is still exactly the filename. */}
               <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" className={styles.sourceIcon}>
                 <path d="M3 1.6 h5 l3 3 v7.8 h-8 Z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
                 <path d="M8 1.6 V4.6 H11" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
               </svg>
-              {formatSourceLabel(source)}
+              {source.filename}
             </li>
           ))}
         </ul>
@@ -616,14 +633,26 @@ function SourceList({
   );
 }
 
-/** "<filename> p.<page>" when `page` is present, "<filename>" alone otherwise (hybrid-rag
- *  Spec AC-19, §7 Q2's confirmed display rule -- not a new decision made here). */
-function formatSourceLabel(source: ChatSource): string {
-  return source.page !== null ? `${source.filename} p.${source.page}` : source.filename;
+/** Distinct source documents -- deduped by `documentId`, first occurrence wins, retrieval
+ *  order otherwise preserved (user decision 2026-09-02: the citation area shows *documents*,
+ *  not retrieved chunks; the page-suffix display was removed outright, option ① over the
+ *  merged-pages alternative). Shared by `TopBadge`'s `RAG 근거 사용됨 · N건` and
+ *  `SourceList`'s header/chips so the two render points structurally cannot disagree about
+ *  the count (chat-prototype-port:AC-43's closing clause). Call only with a value
+ *  `isValidSourceList` accepted. */
+function uniqueSourceDocuments(sources: ChatSource[]): ChatSource[] {
+  const seen = new Set<string>();
+  return sources.filter((source) => {
+    if (seen.has(source.documentId)) return false;
+    seen.add(source.documentId);
+    return true;
+  });
 }
 
-/** True only for an array whose every element has at least the shape `formatSourceLabel` and
- *  the `<li>` key builder above actually read (`filename`, `page`, `documentId`) -- guards
+/** True only for an array whose every element has at least the shape the chip renderer,
+ *  `<li>` key builder, and `uniqueSourceDocuments` above actually read (`filename`,
+ *  `documentId`, plus the wire-contract `page` field kept validated even though the display
+ *  no longer renders it) -- guards
  *  against a wire-contract violation like `sources: [null]` reaching `.map` (review 2026-08-31
  *  round-2 security Low-1). */
 function isValidSourceList(sources: unknown): sources is ChatSource[] {
