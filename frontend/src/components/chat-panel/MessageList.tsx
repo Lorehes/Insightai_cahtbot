@@ -290,6 +290,23 @@ const MessageRow = memo(function MessageRow({
           data-testid={`message-${message.id}`}
         >
           <Markdown components={markdownComponents}>{message.content}</Markdown>
+          {message.streamStatus === "streaming" && message.content === "" && (
+            // 2026-09-02 (user decision, alongside the backend's app.chat.stream-timeout raise):
+            // a reasoning model (e.g. qwen/qwen3.8-flash) can think for tens of seconds before
+            // its first visible token, and the raised timeout makes that wait longer than it
+            // was. Until then the row was an empty markdown div plus a blinking caret, which
+            // read as "stuck" and invited a cancel. Shown only while nothing has arrived yet --
+            // the first delta replaces it, so it never sits next to real content. Lives inside
+            // the `role="status"` live region on purpose, so assistive tech hears the wait too.
+            <span className={styles.thinking} data-testid="thinking-indicator">
+              모델이 답변을 생각하는 중입니다
+              <span className={styles.thinkingDots} aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
+            </span>
+          )}
           {message.streamStatus === "streaming" && (
             // chat-prototype-port:AC-16 -- exactly one caret while streaming, none once the
             // stream ends. `prefers-reduced-motion: reduce` stops the blink (Spec §8 D-8) but
