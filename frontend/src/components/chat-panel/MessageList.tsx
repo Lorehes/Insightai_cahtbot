@@ -22,6 +22,20 @@ import styles from "./MessageList.module.css";
  *   per-message field is also what makes `AC-22` (citations stay attached to the message that
  *   carried them, never bleed into a later turn) true for free -- there is no shared/global
  *   sources state to accidentally cross-contaminate.
+ * [Caution] `ragEnabledAtSend` (user-reported defect fix, 2026-09-02) is the conversation's
+ *   RAG setting *captured at the moment this turn was sent* -- the value the backend actually
+ *   answered under. Deliberately per-message, not the conversation's *current* toggle value:
+ *   flipping the header toggle must not retroactively relabel answers generated under the old
+ *   setting (the observed defect: toggling OFF made every past RAG-ON answer render the
+ *   "RAG 근거 미사용" badge and, once `SourceList` gained its AC-46 gate, hid its citations
+ *   too). `undefined` means "unknown" -- a history-loaded row (`MessageResponse` carries no
+ *   per-turn RAG flag) or a send made while the setting itself was unverified -- and renders
+ *   neither the ON nor the OFF reading, the same three-state discipline the old conversation-
+ *   level `ragEnabled` prop followed. Set once, at message creation, by {@link
+ *   ../chat-panel/ChatPanel}'s `handleSend`; never updated afterwards. Carries meaning only
+ *   for `role: "assistant"`, like `streamStatus`/`sources` above. Spec note: AC-24/AC-25/
+ *   AC-43/AC-46 are worded conversation-level ("RAG 가 꺼진 대화의…") -- this per-message
+ *   reading is a user-directed behavior change awaiting a Spec wording amendment.
  * [AC] hybrid-rag:AC-21, hybrid-rag:AC-22
  */
 export interface ChatMessage {
@@ -30,6 +44,7 @@ export interface ChatMessage {
   content: string;
   streamStatus?: "streaming" | "done" | "error";
   sources?: ChatSource[] | null;
+  ragEnabledAtSend?: boolean;
 }
 
 /** Fixed example-question chip labels for the empty-transcript state (Spec `P:158-160`,
@@ -69,26 +84,20 @@ const EXAMPLE_QUESTIONS = [
  *   scoped to the conversation title) documents that no other `<h1>`/`<h2>`/`<h3>` renders
  *   anywhere in this component tree; introducing one here for decorative emphasis alone
  *   would falsify that documented invariant for no AC-backed reason.
- * [Caution] `ragEnabled` is `boolean | undefined`, a real three-state value, not a boolean with
- *   a default (card T14 finishing work, Medium-1, chat-prototype-port:AC-42) -- `undefined`
- *   means "not yet known" (e.g. {@link ../chat-workspace/ChatWorkspace}'s `ragById` has no entry
- *   for the selected conversation yet), or "known but unverified" (a failed RAG-toggle PATCH no
- *   longer deletes the `ragById` entry -- card T16 tracks it in a separate `ragUnverified` set
- *   instead, and {@link ../chat-workspace/ChatWorkspace} gates this very prop to `undefined` for
- *   exactly the duration an id stays in that set, T16 2R High-1; see that component's own
- *   `handleToggleRag` and `isRagUnverified` [Caution]s). Either way this component must render
- *   neither the ON nor the OFF reading -- collapsing it to a default (this component's own
- *   previous `= true`) would silently claim a value this screen does not actually have, in the
- *   document-leak direction
- *   (an unconfirmed conversation could render/behave as if RAG were on). `TopBadge` and the
- *   RAG-OFF notice below both branch on `ragEnabled === false` specifically, not `!ragEnabled`,
- *   so `undefined` falls through to "render nothing" the same way `TopBadge`'s RAG-ON badges
- *   (card T15, chat-prototype-port:AC-43) also do for their own unresolved cases -- see
- *   {@link TopBadge}'s own [Caution]. A real caller ({@link
- *   ../chat-workspace/ChatWorkspace} via {@link ../chat-panel/ChatPanel}) always passes the
- *   *selected conversation's* actual value -- this is a conversation-level setting (Spec §Tech
- *   Review AD-6/§8 D-1), not a per-message field, so it lives on this component's own props, not
- *   on {@link ChatMessage}.
+ * [Caution] The RAG reading (`RAG 근거 미사용` badge, RAG-OFF notice box, `SourceList`'s AC-46
+ *   gate) is per-message since 2026-09-02: every render site below reads the row's own
+ *   `message.ragEnabledAtSend` (the send-time snapshot -- see {@link ChatMessage}'s own
+ *   [Caution]), never the conversation's current toggle value. The old conversation-level
+ *   `ragEnabled` prop applied the *current* toggle to every past row, so switching the header
+ *   toggle OFF retroactively stamped "RAG 근거 미사용 · 모델 일반 지식" (and hid citations) on
+ *   answers that were actually generated with RAG ON -- the user-reported defect this change
+ *   fixes. The three-state discipline is unchanged (card T14 finishing work, Medium-1,
+ *   chat-prototype-port:AC-42): `undefined` means "unknown" (a history-loaded row, or a send
+ *   made while the setting was unverified -- card T16's `ragUnverified` gating upstream in
+ *   {@link ../chat-workspace/ChatWorkspace} makes {@link ../chat-panel/ChatPanel} snapshot
+ *   `undefined` then) and must render neither the ON nor the OFF reading; `TopBadge` and the
+ *   RAG-OFF notice below still branch on `=== false` specifically, never a falsy check. The
+ *   `ragEnabled` prop itself is retained in the type but ignored -- see its own doc line.
  * [Caution] `onExampleSelect` is called with the clicked chip's label exactly as it appears
  *   in {@link EXAMPLE_QUESTIONS} -- no trim, no transform (chat-prototype-port:AC-14 requires
  *   a character-for-character match against `streamAssistantReply`'s `message` argument).
@@ -112,17 +121,14 @@ const EXAMPLE_QUESTIONS = [
  */
 export function MessageList({
   messages,
-  ragEnabled,
   isSending = false,
   onExampleSelect,
   onRetry,
 }: {
   messages: ChatMessage[];
-  /** The conversation's RAG setting, forwarded to every assistant row's top badge slot
-   *  (chat-prototype-port:AC-24) and RAG-OFF notice box (chat-prototype-port:AC-25).
-   *  `undefined` is a real "not yet known" third state (card T14 finishing work, Medium-1) --
-   *  see this component's own [Caution] above. No default here anymore: a missing value must
-   *  not silently read as either ON or OFF. */
+  /** @deprecated Ignored since 2026-09-02 -- the RAG reading is per-message now
+   *  (`ChatMessage.ragEnabledAtSend`, see this component's own [Caution] above). Kept in the
+   *  type only so existing callers/tests still compile; removing it is the test owner's call. */
   ragEnabled?: boolean;
   /** Whether a turn is currently streaming, forwarded to every row so an error card's
    *  "다시 시도" button can be disabled while one is in flight (chat-prototype-port:AC-20) --
@@ -169,7 +175,6 @@ export function MessageList({
         <MessageRow
           key={message.id}
           message={message}
-          ragEnabled={ragEnabled}
           isSending={isSending}
           previousUserContent={messages[index - 1]?.content}
           onRetry={onRetry}
@@ -198,8 +203,8 @@ export function MessageList({
  *   every chunk creates a new messages array, `.map` creates a new element for every row
  *   regardless of whether that row's own data changed, and every row's `<Markdown>` re-parses
  *   its (unchanged) content from scratch. The custom comparator checks exactly the fields this
- *   component reads (`id`, `role`, `content`, `streamStatus`, `sources`, and now the sibling
- *   `ragEnabled` prop card T6 adds) rather than relying on default shallow-prop-equality,
+ *   component reads (`id`, `role`, `content`, `streamStatus`, `sources`, and -- since
+ *   2026-09-02 -- `ragEnabledAtSend`) rather than relying on default shallow-prop-equality,
  *   because the `message` object itself is a new reference on every parent render regardless
  *   of memo.
  *   Deliberately *not* addressed here: the currently-streaming message's own repeated
@@ -237,17 +242,15 @@ export function MessageList({
  *   starts or stops.
  * [AC] chat-prototype-port:AC-15, chat-prototype-port:AC-16, chat-prototype-port:AC-19,
  *   chat-prototype-port:AC-20, chat-prototype-port:AC-24, chat-prototype-port:AC-25,
- *   chat-prototype-port:AC-26, chat-prototype-port:AC-43
+ *   chat-prototype-port:AC-26, chat-prototype-port:AC-43, chat-prototype-port:AC-46
  */
 const MessageRow = memo(function MessageRow({
   message,
-  ragEnabled,
   isSending,
   previousUserContent,
   onRetry,
 }: {
   message: ChatMessage;
-  ragEnabled: boolean | undefined;
   isSending: boolean;
   previousUserContent?: string;
   onRetry?: (text: string) => void;
@@ -274,7 +277,7 @@ const MessageRow = memo(function MessageRow({
         <span className={styles.visuallyHidden}>어시스턴트</span>
         <TopBadge
           streamStatus={message.streamStatus}
-          ragEnabled={ragEnabled}
+          ragEnabledAtSend={message.ragEnabledAtSend}
           sources={message.sources}
         />
         <div
@@ -314,17 +317,21 @@ const MessageRow = memo(function MessageRow({
             </button>
           </div>
         )}
-        <SourceList sources={message.sources} streamStatus={message.streamStatus} />
-        {ragEnabled === false && (
-          // chat-prototype-port:AC-25 -- gated on `ragEnabled === false` specifically (card T14
-          // finishing work, Medium-1), not the old `!ragEnabled` (which also matched `undefined`
-          // and would have rendered this "RAG 가 꺼진 대화" notice for a conversation whose real
-          // state is merely unconfirmed, not actually OFF). Otherwise matches the AC's own
-          // wording ("RAG 가 꺼진 대화의 ... 답변 아래에"), gated on `ragEnabled` alone, not on
-          // `streamStatus`. This can render before the stream ends (unlike the OFF badge above,
-          // which only appears once `TopBadge` reaches its post-streaming branch) -- the
-          // prototype's own `showAnswerOff` block (P:269-294) has no streaming/done split
-          // either, only `inThread && !s.ragOn`.
+        <SourceList
+          sources={message.sources}
+          streamStatus={message.streamStatus}
+          ragEnabledAtSend={message.ragEnabledAtSend}
+        />
+        {message.ragEnabledAtSend === false && (
+          // chat-prototype-port:AC-25 -- reads the message's own send-time snapshot since
+          // 2026-09-02 (see `ChatMessage.ragEnabledAtSend`'s [Caution]): the notice marks how
+          // *this* answer was generated, so a later toggle flip must not add/remove it under
+          // past answers. Still `=== false` specifically (card T14 finishing work, Medium-1),
+          // never a falsy check (which also matches `undefined` -- unknown, e.g. history
+          // rows). Not gated on `streamStatus`: this can render before the stream ends
+          // (unlike the OFF badge above, which only appears once `TopBadge` reaches its
+          // post-streaming branch) -- the prototype's own `showAnswerOff` block (P:269-294)
+          // has no streaming/done split either.
           <div className={styles.ragOffNotice}>
             <svg
               width="17"
@@ -351,13 +358,11 @@ const MessageRow = memo(function MessageRow({
 function areMessagePropsEqual(
   prev: {
     message: ChatMessage;
-    ragEnabled: boolean | undefined;
     isSending: boolean;
     previousUserContent?: string;
   },
   next: {
     message: ChatMessage;
-    ragEnabled: boolean | undefined;
     isSending: boolean;
     previousUserContent?: string;
   },
@@ -368,7 +373,7 @@ function areMessagePropsEqual(
     prev.message.content === next.message.content &&
     prev.message.streamStatus === next.message.streamStatus &&
     prev.message.sources === next.message.sources &&
-    prev.ragEnabled === next.ragEnabled &&
+    prev.message.ragEnabledAtSend === next.message.ragEnabledAtSend &&
     // Card T10 -- `isSending` must force every row to re-render (not only the row whose own
     // `message`/`ragEnabled` changed), or an error card's `onRetry` closure below goes stale
     // while its `disabled` state does too -- see `MessageRow`'s own [Caution].
@@ -382,7 +387,7 @@ function areMessagePropsEqual(
  *   exclusive states the prototype renders in the same position: the streaming indicator
  *   (chat-prototype-port:AC-15) while the reply is still arriving, or -- once the stream has
  *   ended -- a summary of whether this answer used retrieved evidence at all.
- * [Rationale] `streamStatus === "streaming"` takes priority over `ragEnabled`: while a reply
+ * [Rationale] `streamStatus === "streaming"` takes priority over `ragEnabledAtSend`: while a reply
  *   is still arriving there is no resolved RAG-evidence outcome to summarize yet, the same
  *   "not yet known, render nothing/something else" reasoning {@link SourceList} already
  *   applies to `sources === null` during streaming.
@@ -396,19 +401,21 @@ function areMessagePropsEqual(
  *   null | undefined`, plus the implicit "streaming" gate) is documented on that component's
  *   own [Caution]s. Reusing rather than re-deriving keeps the two render points structurally
  *   unable to disagree about what counts as "resolved" (AC-43's closing clause).
- * [Caution] `ragEnabled === false` (card T14 finishing work, Medium-1), not `!ragEnabled` --
- *   `ragEnabled === undefined` ("not yet known", see {@link MessageList}'s own [Caution]) must
- *   fall through to `null`, the same value the RAG-ON branch also returns for its own
- *   unresolved cases (AC-43 clauses ①④⑤⑥ below) -- never silently rendered as the OFF badge.
+ * [Caution] `ragEnabledAtSend === false` (card T14 finishing work, Medium-1; per-message
+ *   send-time snapshot since 2026-09-02, see {@link ChatMessage}'s own [Caution]), never a
+ *   falsy check -- `ragEnabledAtSend === undefined` ("unknown": history rows, or a send made
+ *   while the setting was unverified) must fall through to `null`, the same value the RAG-ON
+ *   branch also returns for its own unresolved cases (AC-43 clauses ①④⑤⑥ below) -- never
+ *   silently rendered as the OFF badge.
  * [AC] chat-prototype-port:AC-15, chat-prototype-port:AC-24, chat-prototype-port:AC-43
  */
 function TopBadge({
   streamStatus,
-  ragEnabled,
+  ragEnabledAtSend,
   sources,
 }: {
   streamStatus: ChatMessage["streamStatus"];
-  ragEnabled: boolean | undefined;
+  ragEnabledAtSend: boolean | undefined;
   /** Same prop {@link SourceList} receives, passed through unmodified -- see this function's
    *  own [Caution] for why an already-derived count would not do. */
   sources: ChatSource[] | null | undefined;
@@ -439,7 +446,7 @@ function TopBadge({
     );
   }
 
-  if (ragEnabled === false) {
+  if (ragEnabledAtSend === false) {
     return (
       <div className={`${styles.topBadge} ${styles.ragOffBadge}`}>
         <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
@@ -451,7 +458,7 @@ function TopBadge({
     );
   }
 
-  if (ragEnabled === true && streamStatus === "done" && isValidSourceList(sources)) {
+  if (ragEnabledAtSend === true && streamStatus === "done" && isValidSourceList(sources)) {
     return sources.length > 0 ? (
       <div className={`${styles.topBadge} ${styles.ragUsedBadge}`}>
         <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
@@ -477,7 +484,7 @@ function TopBadge({
     );
   }
 
-  // undefined `ragEnabled` / `null`-or-`undefined` `sources` / `streamStatus === "error"` all
+  // undefined `ragEnabledAtSend` / `null`-or-`undefined` `sources` / `streamStatus === "error"` all
   // fall through to null -- AC-43 clauses ①④⑤⑥. Clause ② (OFF) and clause ③ (streaming) are
   // handled by the earlier branches above, not here.
   return null;
@@ -486,7 +493,14 @@ function TopBadge({
 /**
  * [Purpose] Renders the citation area under an assistant reply -- hybrid-rag Spec `AC-18`
  *   (1+ sources), `AC-20` (confirmed-empty sources), and `AC-21`'s three-clause state model
- *   (streaming / resolved / stream-ended-but-never-resolved).
+ *   (streaming / resolved / stream-ended-but-never-resolved). Gated first, ahead of all of
+ *   that, by `chat-prototype-port:AC-46`: a conversation with RAG OFF renders no citation area
+ *   at all, regardless of `streamStatus`/`sources`.
+ * [Rationale] AC-46's gate exists because OFF means "never searched", which must not read as
+ *   "searched and found nothing" -- `AC-20`'s confirmed-empty box below (「이 답변에는 근거 문서가
+ *   없습니다」) is reserved for a RAG-ON answer that actually ran retrieval and got zero results;
+ *   rendering it for an OFF answer as well (the pre-AC-46 defect, `BL-049`) misrepresents "we
+ *   didn't look" as "we looked and there was nothing there".
  * [Rationale] `streamStatus` and `sources` are read together, not `sources` alone, because
  *   `sources === null` is ambiguous on its own -- it means "not yet known" while streaming
  *   (clause ①, render nothing) and "never arrived" once the stream has ended (clause ③,
@@ -517,15 +531,37 @@ function TopBadge({
  *   via JSX text interpolation below, never `dangerouslySetInnerHTML`. `sources` itself is
  *   also not trusted to actually be an array (review 2026-08-31 security Low-1) -- a malformed
  *   payload falls back to the clause ③ screen rather than throwing mid-render.
- * [AC] hybrid-rag:AC-18, hybrid-rag:AC-19, hybrid-rag:AC-20, hybrid-rag:AC-21
+ * [Caution] `ragEnabledAtSend === false` (never a falsy check) short-circuits every clause
+ *   below -- per-message send-time snapshot since 2026-09-02, see {@link ChatMessage}'s own
+ *   [Caution]. `ragEnabledAtSend === undefined` ("unknown", same three-state value {@link
+ *   TopBadge}'s own [Caution] documents) must still fall through to the existing
+ *   `streamStatus`/`sources` state machine unchanged, or a message whose RAG reading is merely
+ *   unknown (every history-loaded row today) would have its sources hidden even though they may
+ *   exist (AC-45's history citation rendering relies on exactly this fall-through).
+ *   `ragEnabledAtSend === true` also does not change this component's behavior at all --
+ *   AC-46's closing clause ("RAG 가 켜진 대화에서는 기존 동작을 유지한다") is satisfied by leaving
+ *   every clause below untouched, not by adding a parallel `true` branch.
+ * [AC] hybrid-rag:AC-18, hybrid-rag:AC-19, hybrid-rag:AC-20, hybrid-rag:AC-21,
+ *   chat-prototype-port:AC-46
  */
 function SourceList({
   sources,
   streamStatus,
+  ragEnabledAtSend,
 }: {
   sources: ChatSource[] | null | undefined;
   streamStatus: ChatMessage["streamStatus"];
+  ragEnabledAtSend: boolean | undefined;
 }) {
+  if (ragEnabledAtSend === false) {
+    // AC-46: OFF-at-send means this message's own stream never ran a retrieval step, so it
+    // outranks every streamStatus/sources state below -- none of those states can mean "found"
+    // or "not found" when nothing was searched. Send-time snapshot, not the conversation's
+    // current toggle (2026-09-02): a later toggle flip must not hide or reveal a past answer's
+    // citations.
+    return null;
+  }
+
   if (streamStatus === "streaming" || streamStatus === undefined) {
     return null; // AC-21 clause (1): stream not yet ended -- nothing to show.
   }

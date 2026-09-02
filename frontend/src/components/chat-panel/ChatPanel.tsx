@@ -46,10 +46,15 @@ function nextMessageId(prefix: "user" | "assistant"): string {
  *   caller that changes conversations is expected to do so via a `key` change (a fresh
  *   mount), not a prop update on the same instance.
  * [Caution] `ragEnabled` (card T6, retyped to `boolean | undefined` by card T14 finishing work
- *   Medium-1) is a straight pass-through to {@link MessageList} -- this component neither reads
- *   nor sends it (`streamAssistantReply`'s wire request has no per-message RAG field, Spec §8
- *   D-1: the setting is conversation-scoped, changed only via `PATCH /api/conversations/{id}`
- *   from {@link ../chat-workspace/ChatWorkspace}). No default value anymore -- this component
+ *   Medium-1) is no longer passed through to {@link MessageList} (2026-09-02): this component
+ *   reads it in exactly two places -- `composerHint` below, and `handleSend`, which snapshots
+ *   the value onto each new assistant message as `ragEnabledAtSend` so an answer keeps the RAG
+ *   reading it was actually generated under (a later toggle flip must not relabel past answers
+ *   -- see {@link ./MessageList}'s `ChatMessage` [Caution] for the user-reported defect this
+ *   fixes). It is still never sent on the wire (`streamAssistantReply`'s request has no
+ *   per-message RAG field, Spec §8 D-1: the setting is conversation-scoped, changed only via
+ *   `PATCH /api/conversations/{id}` from {@link ../chat-workspace/ChatWorkspace}). No default
+ *   value anymore -- this component
  *   used to default a missing value to `true` (this project's backend default for a brand-new
  *   conversation), but {@link ../chat-workspace/ChatWorkspace} can now legitimately pass
  *   `undefined` for an *already-known* conversation too. A failed RAG-toggle PATCH no longer
@@ -123,8 +128,9 @@ export function ChatPanel({
   initialMessages?: ChatMessage[];
   /** Forwarded as `streamAssistantReply`'s `model` option on every send (chat:AC-39). */
   model?: string;
-  /** Forwarded to {@link MessageList} for the top badge slot and RAG-OFF notice
-   *  (chat-prototype-port:AC-24/AC-25) -- see this component's own [Caution]. `undefined` is a
+  /** Read for the composer hint (chat-prototype-port:AC-22) and snapshotted onto each new
+   *  assistant message as `ragEnabledAtSend` (badge/notice/citation gating, chat-prototype-
+   *  port:AC-24/AC-25/AC-43/AC-46) -- see this component's own [Caution]. `undefined` is a
    *  real "not yet known" third state (card T14 finishing work, Medium-1), not defaulted here. */
   ragEnabled?: boolean;
   /** Fired once this component's own auto-create (no `conversationId` supplied) resolves. */
@@ -189,6 +195,10 @@ export function ChatPanel({
         content: "",
         streamStatus: "streaming",
         sources: null,
+        // Send-time snapshot (2026-09-02): the RAG setting this turn is actually answered
+        // under. Set once here, never updated -- a later toggle flip must not relabel this
+        // answer's badge/notice/citations (see MessageList's `ChatMessage` [Caution]).
+        ragEnabledAtSend: ragEnabled,
       };
 
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
@@ -275,7 +285,7 @@ export function ChatPanel({
         setIsSending(false);
       }
     },
-    [conversation, draft, isSending, model, updateAssistantMessage],
+    [conversation, draft, isSending, model, ragEnabled, updateAssistantMessage],
   );
 
   const handleSubmit = useCallback(
@@ -339,7 +349,6 @@ export function ChatPanel({
     <div className={styles.panel}>
       <MessageList
         messages={messages}
-        ragEnabled={ragEnabled}
         isSending={isSending}
         onExampleSelect={(text) => void handleSend(text)}
         onRetry={(text) => void handleSend(text)}
