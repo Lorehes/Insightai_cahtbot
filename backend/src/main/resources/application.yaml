@@ -134,6 +134,24 @@ app:
     # sources 비우기(hybrid-rag AC-23)로 닫는다. 문서가 늘어나면 재측정 대상(eval Spec §8 R6).
     bm25-raw-score-threshold: 1.3     # ParadeDB pdb.score 스케일
     vector-raw-score-threshold: 0.35  # bge-m3 코사인 유사도 스케일
+  glossary:
+    # ── 고유명사 용어 목록 (2026-09-03, 다국어 총람 §4-4 의 대체) ──
+    # pg_search 0.25.4 의 lindera(korean) 에는 사용자 사전·동의어가 없다(컨테이너 + 소스 실측,
+    # {DOC_ROOT}/docs/eval/paradedb-user-dictionary-probe-2026-09-03.md). 그래서 '인사이트에이아이'가
+    # '인사이트 / 에 / 이아이' 로 쪼개지고 조사 '에' 가 무관한 청크를 끌어온다(D1 스파이크 5-c 의 1.18점).
+    # 대신 질의에 아래 용어가 글자 그대로 들어 있으면 BM25 질의에 구문 조건(content ### 용어)을
+    # AND 로 덧붙인다(GlossaryTermMatcher → ParadeDbBm25SearchAdapter). 운영 22청크 실측: 같은 질의가
+    # 6행→3행(노이즈 3행 제거), 정답 점수 5.88→10.89. 여러 용어가 걸리면 OR 로 묶는다.
+    # 규칙: ① 코퍼스에 실제로 쓰인 표기만 넣는다 — 질의에는 있는데 문서에 없는 표기는 그 질의의
+    #        BM25 축을 0건으로 만든다(벡터 축만 남음). ② 'AI' 처럼 짧고 흔한 말은 넣지 않는다 —
+    #        구문 조건이 사실상 무효가 된다. ③ 바꿔도 재색인은 없다. 다만 걸린 질의의 BM25 점수가
+    #        올라가므로 목록이 열 개를 넘으면 bm25-raw-score-threshold 를 재측정한다.
+    # 추가 절차: 0건 질의 로그에서 후보 → 아래에 추가 → 재기동. 아래 세 표기는 회사소개서 청크에
+    # 각각 3건씩 존재함을 `content ### '…'` 로 확인했다(2026-09-03).
+    terms:
+      - 인사이트에이아이
+      - InsightAI
+      - 인사이트AI
   rerank:
     enabled: false
     model: ${RERANK_MODEL:cohere/rerank-v3.5}

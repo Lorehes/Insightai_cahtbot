@@ -102,8 +102,15 @@ public final class TestAppPropertiesFactory {
         private AppProperties.Models models = validModels();
         private AppProperties.Chat chat =
                 new AppProperties.Chat(new AppProperties.Chat.Memory(40), Duration.ofMinutes(5));
+        // Empty by default: no phrase constraint is added to the BM25 query unless a test opts in.
+        private AppProperties.Glossary glossary = new AppProperties.Glossary(List.of());
 
         private Builder() {
+        }
+
+        public Builder glossary(AppProperties.Glossary glossary) {
+            this.glossary = glossary;
+            return this;
         }
 
         public Builder auth(AppProperties.Auth auth) {
@@ -142,7 +149,7 @@ public final class TestAppPropertiesFactory {
         }
 
         public AppProperties build() {
-            return new AppProperties(auth, search, rerank, ingest, session, models, chat);
+            return new AppProperties(auth, search, rerank, ingest, session, models, chat, glossary);
         }
     }
 }

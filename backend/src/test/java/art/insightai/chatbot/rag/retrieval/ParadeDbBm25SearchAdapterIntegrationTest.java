@@ -164,7 +164,8 @@ class ParadeDbBm25SearchAdapterIntegrationTest extends IntegrationTestBase {
         JdbcTemplate countingJdbcTemplate = new JdbcTemplate(new CountingDataSource(dataSource, statementCount));
         ParadeDbBm25SearchAdapter countingAdapter =
                 new ParadeDbBm25SearchAdapter(
-                        countingJdbcTemplate, new NonIndexedDocumentLookup(countingJdbcTemplate));
+                        countingJdbcTemplate, new NonIndexedDocumentLookup(countingJdbcTemplate),
+                        new GlossaryTermMatcher(List.of()));
 
         // when
         List<RetrievedChunk> result = countingAdapter.search("ES-2024-A", 20);

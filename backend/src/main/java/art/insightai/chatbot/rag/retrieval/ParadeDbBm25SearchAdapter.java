@@ -104,56 +104,95 @@ public class ParadeDbBm25SearchAdapter implements Bm25SearchPort {
                     + "LIMIT ?";
 
     /**
-     * [Purpose] Same query as {@link #BM25_SEARCH_SQL} plus an exclusion predicate for orphaned
-     *   chunks (T13/D-T10, hybrid-rag:AC-15) — used only when {@link #search} finds a non-empty
-     *   exclusion population.
+     * [Purpose] Optional predicate appended to {@link #BM25_SEARCH_SQL}'s {@code WHERE} when the
+     *   query contains one or more glossary terms (2026-09-03, {@link GlossaryTermMatcher}):
+     *   {@code AND (content ### ? OR content ### ? ...)}, one {@code ###} per matched term.
+     * [Rationale] {@code ###} is ParadeDB's phrase-match operator. Unlike {@code |||} it requires
+     *   the term's whole token sequence in order, so a chunk that merely shares the particle
+     *   {@code 에} with {@code 인사이트에이아이} no longer qualifies -- measured on the live table
+     *   (probe report §3): the same query dropped from 6 rows to 3 with the noise rows gone, and the
+     *   answer chunks' scores doubled because both predicates contribute. The matched terms are
+     *   ORed, not ANDed, so a query naming two glossary terms still returns chunks that contain
+     *   either one; the ranking then favors chunks containing both. Applying {@code ###} (or
+     *   {@code &&&}) to the *whole* query instead would return 0 rows for any natural-language
+     *   sentence (probe report §3, second row), which is why the full query stays on {@code |||}.
+     * [Caution] Verified on the live container that {@code ###}, like {@code |||}, treats a bound
+     *   text parameter as a literal phrase and never as query DSL: {@code content ###
+     *   '(((\"unclosed'} and {@code content ### 'a OR b) AND (c'} both return 0 rows without a parse
+     *   error, and {@code PREPARE p(text, text, int) ... content ||| $1 AND (content ### $2)}
+     *   executes with bound parameters (2026-09-03). The same bound-parameter rule as the main
+     *   query therefore applies to every term here.
+     */
+    private static final String PHRASE_PREDICATE = "content ### ?";
+
+    /**
+     * [Purpose] Optional predicate appended for orphaned chunks (T13/D-T10, hybrid-rag:AC-15),
+     *   used only when {@link #search} finds a non-empty exclusion population.
      * [Caution] {@code %s} is substituted with a placeholder list ({@code "?, ?, ..."}) sized to
      *   that population — never with an id value itself — before this string reaches {@link
      *   JdbcTemplate}; every actual excluded id still arrives as its own bound parameter. This is
      *   still a single-table, no-join predicate (a plain {@code NOT IN} list, not a subquery or a
      *   join against {@code documents}), so it does not reintroduce Risk R-B.
      */
-    private static final String BM25_SEARCH_SQL_WITH_EXCLUSION_TEMPLATE =
-            "SELECT id, content, metadata, pdb.score(id) AS score "
-                    + "FROM vector_store_bgem3 "
-                    + "WHERE content ||| ? "
-                    + "AND metadata->>'document_id' NOT IN (%s) "
-                    + "ORDER BY score DESC "
-                    + "LIMIT ?";
+    private static final String EXCLUSION_PREDICATE_TEMPLATE = "metadata->>'document_id' NOT IN (%s)";
 
     private final JdbcTemplate jdbcTemplate;
     private final JsonParser jsonParser;
     private final NonIndexedDocumentLookup nonIndexedDocumentLookup;
+    private final GlossaryTermMatcher glossaryTermMatcher;
 
     public ParadeDbBm25SearchAdapter(
-            JdbcTemplate jdbcTemplate, NonIndexedDocumentLookup nonIndexedDocumentLookup) {
+            JdbcTemplate jdbcTemplate,
+            NonIndexedDocumentLookup nonIndexedDocumentLookup,
+            GlossaryTermMatcher glossaryTermMatcher) {
         this.jdbcTemplate = jdbcTemplate;
         this.jsonParser = JsonParserFactory.getJsonParser();
         this.nonIndexedDocumentLookup = nonIndexedDocumentLookup;
+        this.glossaryTermMatcher = glossaryTermMatcher;
     }
 
     /**
      * [Purpose] Runs the BM25 axis query and maps each row straight to a {@link RetrievedChunk},
-     *   excluding chunks that belong to a non-{@code INDEXED} document (T13/D-T10).
-     * [Caution] {@code query}, {@code topK}, and every excluded document id are passed as JDBC
-     *   bind parameters, never concatenated into the SQL text — see this class's [Caution] for
-     *   why that is a hard requirement here.
+     *   requiring any glossary term the query names as a phrase (2026-09-03) and excluding chunks
+     *   that belong to a non-{@code INDEXED} document (T13/D-T10).
+     * [Rationale] The SQL is assembled from {@link #BM25_SEARCH_SQL} by inserting zero, one, or
+     *   two {@code AND} predicates before {@code ORDER BY}; when neither applies the string is
+     *   byte-for-byte the original constant, so the "no glossary, no exclusion" path is unchanged
+     *   from before this card. Whatever the combination, it is still one single-table query and
+     *   exactly one {@code PreparedStatement} per call ({@code
+     *   ParadeDbBm25SearchAdapterIntegrationTest}'s count assertion).
+     * [Caution] {@code query}, {@code topK}, every matched glossary term, and every excluded
+     *   document id are passed as JDBC bind parameters, never concatenated into the SQL text — see
+     *   this class's [Caution] for why that is a hard requirement here. The only strings spliced
+     *   into the SQL are fixed predicate templates and {@code ?} placeholder lists sized to the
+     *   parameter counts. Parameter order must match predicate order: query, phrase terms,
+     *   excluded ids, limit.
      * [AC] hybrid-rag:AC-13
      * [AC] hybrid-rag:AC-15
      */
     @Override
     public List<RetrievedChunk> search(String query, int topK) {
+        List<String> phraseTerms = glossaryTermMatcher.termsIn(query);
         List<String> excludedDocumentIds = excludedDocumentIds();
-        if (excludedDocumentIds.isEmpty()) {
-            return jdbcTemplate.query(BM25_SEARCH_SQL, this::mapRow, query, topK);
-        }
-        String placeholders =
-                excludedDocumentIds.stream().map(id -> "?").collect(Collectors.joining(", "));
-        String sql = String.format(BM25_SEARCH_SQL_WITH_EXCLUSION_TEMPLATE, placeholders);
-        List<Object> params = new ArrayList<>(excludedDocumentIds.size() + 2);
+
+        StringBuilder predicates = new StringBuilder();
+        List<Object> params = new ArrayList<>(phraseTerms.size() + excludedDocumentIds.size() + 2);
         params.add(query);
-        params.addAll(excludedDocumentIds);
+        if (!phraseTerms.isEmpty()) {
+            predicates.append("AND (")
+                    .append(phraseTerms.stream().map(t -> PHRASE_PREDICATE).collect(Collectors.joining(" OR ")))
+                    .append(") ");
+            params.addAll(phraseTerms);
+        }
+        if (!excludedDocumentIds.isEmpty()) {
+            String placeholders =
+                    excludedDocumentIds.stream().map(id -> "?").collect(Collectors.joining(", "));
+            predicates.append("AND ").append(String.format(EXCLUSION_PREDICATE_TEMPLATE, placeholders)).append(' ');
+            params.addAll(excludedDocumentIds);
+        }
         params.add(topK);
+
+        String sql = BM25_SEARCH_SQL.replace("ORDER BY", predicates + "ORDER BY");
         return jdbcTemplate.query(sql, this::mapRow, params.toArray());
     }
 

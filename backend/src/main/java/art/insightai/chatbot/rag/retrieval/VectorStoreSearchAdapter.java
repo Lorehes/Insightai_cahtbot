@@ -95,7 +95,7 @@ public class VectorStoreSearchAdapter implements VectorSearchPort {
      * [Caution] {@code %s} is substituted with a placeholder list ({@code "?, ?, ..."}) sized to
      *   that population -- never with an id value itself -- before this string reaches {@link
      *   JdbcTemplate}; every actual excluded id still arrives as its own bound parameter. Mirrors
-     *   {@link ParadeDbBm25SearchAdapter#BM25_SEARCH_SQL_WITH_EXCLUSION_TEMPLATE}'s same pattern.
+     *   {@link ParadeDbBm25SearchAdapter#EXCLUSION_PREDICATE_TEMPLATE}'s same pattern.
      */
     private static final String VECTOR_SEARCH_SQL_WITH_EXCLUSION_TEMPLATE =
             "SELECT id, content, metadata, embedding <=> ?::vector AS distance "

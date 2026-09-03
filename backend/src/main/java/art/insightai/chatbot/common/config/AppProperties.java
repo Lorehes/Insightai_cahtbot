@@ -27,8 +27,47 @@ public record AppProperties(
         @DefaultValue Ingest ingest,
         @DefaultValue Session session,
         @DefaultValue Models models,
-        @DefaultValue Chat chat
+        @DefaultValue Chat chat,
+        @DefaultValue Glossary glossary
 ) {
+
+    /**
+     * [Purpose] The project's own proper-noun list (company names, product names, aliases,
+     *   product codes) -- the single source every consumer of "words the tokenizer must not
+     *   split" reads from.
+     * [Rationale] pg_search 0.25.4's {@code pdb.lindera(korean)} has no user dictionary and no
+     *   synonym filter (verified 2026-09-03 against the live container and the paradedb/paradedb
+     *   source: the Lindera segmenter's user-dictionary slot is hard-coded to {@code None};
+     *   {@code DOC_ROOT/docs/eval/paradedb-user-dictionary-probe-2026-09-03.md}). The engine
+     *   therefore splits {@code 인사이트에이아이} into {@code 인사이트 / 에 / 이아이}, and the
+     *   lone particle {@code 에} is what drags unrelated chunks into the BM25 axis (D1 spike 5-c's
+     *   1.18-point noise row). The measured workaround (same probe report, §3) is to keep the
+     *   whole query on the {@code |||} match operator and additionally require, with the
+     *   {@code ###} phrase operator, any glossary term that appears verbatim in the query --
+     *   which removes the noise rows and doubles the answer chunk's score. This record is that
+     *   term list. It is a top-level component rather than a field on {@link Search} because
+     *   a glossary is not a search tuning knob: the same list is the natural source for
+     *   query-time synonym expansion, translation glossaries, and prompt-side original-form
+     *   hints later (multilingual-RAG playbook §4-4/§4-5/§1-8), and because {@link Search}'s
+     *   positional constructor is called from nine test sites that a new field would break.
+     * [Caution] Every term is matched as a case-insensitive substring of the query and then
+     *   sent to ParadeDB as a phrase; a term that is spelled one way in queries and another
+     *   way in the corpus (e.g. {@code InsightAI} vs {@code 인사이트에이아이}) filters the BM25
+     *   axis down to zero rows for that query, leaving only the vector axis. List every spelling
+     *   the corpus actually uses. Changing this list needs no reindex -- it only changes the
+     *   query -- but it does shift BM25 scores upward for matched queries, so the axis-native
+     *   threshold ({@code app.search.bm25-raw-score-threshold}) stays valid only in the "no
+     *   term matched" direction; re-sweep if the list grows beyond a handful of terms.
+     */
+    public record Glossary(
+            List<String> terms
+    ) {
+        public Glossary {
+            terms = terms == null
+                    ? List.of()
+                    : terms.stream().map(String::strip).filter(t -> !t.isEmpty()).distinct().toList();
+        }
+    }
 
     /** [Purpose] Authentication strategy. NONE for the demo, WORKS (NAVER WORKS SSO) in Phase 2. */
     public record Auth(
