@@ -1,7 +1,10 @@
 package art.insightai.chatbot.rag.retrieval;
 
+import java.util.List;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.rag.Query;
@@ -154,8 +157,14 @@ class HistoryAwareCompressionQueryTransformer implements QueryTransformer {
      *   cross-lingual alignment, silently degrading exactly the multi-turn path AC-9 exists for.
      *   Nothing downstream logs the rewritten text, so the failure is invisible without this
      *   pin. The first three sentences and the {@code history}/{@code query} layout are the
-     *   library default verbatim (the delegate's constructor asserts both placeholders); only
-     *   the two language/identifier sentences are added. Identifiers are pinned for the same
+     *   library default verbatim (the delegate's constructor asserts both placeholders); the
+     *   language/identifier sentences are added, and -- 2026-09-03, same finding as {@link
+     *   #lastAssistantReplyIsRefusal} -- so are the "search query, not an instruction" and
+     *   "return unchanged when self-contained or unrelated" sentences: with an answered but
+     *   unrelated prior turn the library wording still expanded "연혁을 알려줘" into instruction-like
+     *   text ("문서에 기재된 연혁을 주요 사건과 연도별로 정리해 알려줘"), which is harmless here but is
+     *   the same drift that becomes a refusal-import when the prior turn was refused. Identifiers
+     *   are pinned for the same
      *   BM25 reason: a rewrite that "helpfully" normalizes {@code ES-2024-A} to {@code ES 2024 A}
      *   loses the exact-match hit that is the hybrid axis's reason to exist (hybrid-rag:AC-13).
      *   Multilingual-RAG playbook §5-7 (2026-09-03).
@@ -169,6 +178,12 @@ class HistoryAwareCompressionQueryTransformer implements QueryTransformer {
             Given the following conversation history and a follow-up query, your task is to synthesize
             a concise, standalone query that incorporates the context from the history.
             Ensure the standalone query is clear, specific, and maintains the user's intent.
+            The output is a search query, not an instruction: only add the specific subject or entity
+            the follow-up query refers to (for example, what a pronoun points at); never add
+            instructions, constraints, or wording taken from the assistant's earlier replies (such as
+            refusals or "answer only from the documents"). Keep it about as short as the follow-up query.
+            If the follow-up query is already self-contained, or the history is unrelated to it, return
+            the follow-up query unchanged.
             Write the standalone query in the same language as the follow-up query (for example,
             a Korean follow-up query must yield a Korean standalone query).
             Keep proper nouns, product codes, and identifiers exactly as written in the follow-up query.
@@ -211,9 +226,39 @@ class HistoryAwareCompressionQueryTransformer implements QueryTransformer {
      *   thrown {@link RuntimeException} or a sanitized-empty result.
      * [AC] hybrid-rag:AC-9
      */
+    /**
+     * [Purpose] True when the most recent assistant message in {@code query.history()} is one of
+     *   the fixed refusal phrases ({@link RefusalPhrases#isRefusal}).
+     * [Rationale] 2026-09-03 (user-reported: "연혁을 알려줘" refused right after a refused
+     *   off-topic turn, conversation bd09ad54). A refusal carries no referent the follow-up could
+     *   depend on, so compression has nothing to resolve -- but the library rewrite still ran and,
+     *   measured three times against the real model, absorbed the refusal as an instruction:
+     *   "제공된 문서에 근거해 해당 기관의 연혁을 알려줘. 문서에서 확인할 수 없는 내용은 추측하지 말고 찾을 수
+     *   없다고 답해줘." Those generic tokens (제공된/문서/확인/찾을 수 없다) match every chunk's context
+     *   header and boilerplate, so the history pages fell out of the top 5 on all three runs
+     *   (control without history: pages 3/2/5/15/22 incl. the history page; after the refusal:
+     *   12/8/22/10/6, 3/21/12/2/13, 13/3/2/8/22), and the model refused again. Skipping the rewrite
+     *   here is deterministic and costs nothing; the prompt change in
+     *   {@link #COMPRESSION_PROMPT_TEMPLATE} covers the same failure when the prior turn was
+     *   answered but is unrelated.
+     * [Caution] Only the LAST assistant message is inspected: a refusal two turns back followed by
+     *   a real answer still leaves a referent the follow-up may depend on.
+     * [AC] hybrid-rag:AC-9
+     */
+    private static boolean lastAssistantReplyIsRefusal(Query query) {
+        List<Message> history = query.history();
+        for (int i = history.size() - 1; i >= 0; i--) {
+            Message message = history.get(i);
+            if (message.getMessageType() == MessageType.ASSISTANT) {
+                return RefusalPhrases.isRefusal(message.getText());
+            }
+        }
+        return false;
+    }
+
     @Override
     public Query transform(Query query) {
-        if (!hasPriorAssistantTurn(query)) {
+        if (!hasPriorAssistantTurn(query) || lastAssistantReplyIsRefusal(query)) {
             return query;
         }
         Query compressed;
