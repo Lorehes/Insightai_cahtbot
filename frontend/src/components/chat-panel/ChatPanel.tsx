@@ -299,6 +299,14 @@ export function ChatPanel({
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       // Enter sends; Shift+Enter inserts a newline (standard chat-input convention).
+      // While an IME (Korean/Japanese/Chinese input method) is still composing, Enter is the
+      // "commit this syllable" key, not "send": the browser fires a keydown with
+      // `isComposing === true` (legacy WebKit/Safari reports keyCode 229 instead) and, without
+      // this guard, the message would be sent with the last syllable missing or split across
+      // two messages. Multilingual-RAG playbook §8-3 (2026-09-03).
+      if (e.nativeEvent.isComposing || e.keyCode === 229) {
+        return;
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         void handleSend();
