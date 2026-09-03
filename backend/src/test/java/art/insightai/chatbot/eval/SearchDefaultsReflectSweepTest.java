@@ -51,6 +51,14 @@ class SearchDefaultsReflectSweepTest {
         assertThat(Double.parseDouble(yaml.getProperty("app.search.score-threshold")))
                 .isEqualTo(SweepConfirmedDefaults.SCORE_THRESHOLD);
         assertThat(Integer.parseInt(yaml.getProperty("app.search.rrf-k"))).isEqualTo(SweepConfirmedDefaults.RRF_K);
+        // 2026-09-03 re-sweep: the third (n-gram) axis' settings are pinned the same way.
+        assertThat(Boolean.parseBoolean(yaml.getProperty("app.ngram.enabled")))
+                .isEqualTo(SweepConfirmedDefaults.NGRAM_ENABLED);
+        assertThat(Double.parseDouble(yaml.getProperty("app.ngram.weight")))
+                .isEqualTo(SweepConfirmedDefaults.NGRAM_WEIGHT);
+        assertThat(Integer.parseInt(yaml.getProperty("app.ngram.top-k"))).isEqualTo(SweepConfirmedDefaults.NGRAM_TOP_K);
+        assertThat(Double.parseDouble(yaml.getProperty("app.ngram.raw-score-threshold")))
+                .isEqualTo(SweepConfirmedDefaults.NGRAM_RAW_SCORE_THRESHOLD);
         assertThat(Double.parseDouble(yaml.getProperty("app.search.weight-bm25")))
                 .isEqualTo(SweepConfirmedDefaults.WEIGHT_BM25);
         assertThat(Double.parseDouble(yaml.getProperty("app.search.weight-vector")))

@@ -35,4 +35,12 @@ final class SweepConfirmedDefaults {
     static final double BM25_RAW_SCORE_THRESHOLD = 1.3;
     /** bge-m3 cosine scale. Stage 1: lowest relevant chunk 0.3874. */
     static final double VECTOR_RAW_SCORE_THRESHOLD = 0.35;
+
+    // 2026-09-03 re-sweep (chunk context header + V4 n-gram view): the third axis' settings.
+    // Threshold from raw-score-distribution-2026-09-03.md (found min relevant 2.1528 -> noise
+    // floor 1.5); weight is provisional (stage 2 only compared axis on/off).
+    static final boolean NGRAM_ENABLED = true;
+    static final double NGRAM_WEIGHT = 0.2;
+    static final int NGRAM_TOP_K = 20;
+    static final double NGRAM_RAW_SCORE_THRESHOLD = 1.5;
 }

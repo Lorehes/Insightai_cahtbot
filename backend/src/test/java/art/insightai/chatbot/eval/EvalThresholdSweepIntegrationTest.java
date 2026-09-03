@@ -146,6 +146,13 @@ class EvalThresholdSweepIntegrationTest {
                 () -> String.valueOf(SweepConfirmedDefaults.BM25_RAW_SCORE_THRESHOLD));
         registry.add("app.search.vector-raw-score-threshold",
                 () -> String.valueOf(SweepConfirmedDefaults.VECTOR_RAW_SCORE_THRESHOLD));
+        // 2026-09-03 re-sweep: the n-gram axis at its confirmed settings. HybridWithoutNgramAxis
+        // overrides `enabled` after this call to isolate the axis' effect.
+        registry.add("app.ngram.enabled", () -> String.valueOf(SweepConfirmedDefaults.NGRAM_ENABLED));
+        registry.add("app.ngram.weight", () -> String.valueOf(SweepConfirmedDefaults.NGRAM_WEIGHT));
+        registry.add("app.ngram.top-k", () -> String.valueOf(SweepConfirmedDefaults.NGRAM_TOP_K));
+        registry.add("app.ngram.raw-score-threshold",
+                () -> String.valueOf(SweepConfirmedDefaults.NGRAM_RAW_SCORE_THRESHOLD));
     }
 
     /** [Purpose] Runs one configuration {@link #REPEATS} times; returns the runs in order. */
@@ -385,6 +392,50 @@ class EvalThresholdSweepIntegrationTest {
             assertThat(appProperties.search().vectorRawScoreThreshold()).isZero();
             for (SweepRun run : runSweep(LABEL, "control: same weights, raw thresholds disabled", chatService,
                     conversationService, anonymousUserService, jdbcTemplate)) {
+                assertRowSanity(run.row(), run.label());
+            }
+        }
+    }
+
+    /**
+     * [Purpose] Isolation control for the third axis (2026-09-03): the confirmed configuration
+     *   with {@code app.ngram.enabled=false}, so the delta against {@link ConfirmedHybrid} (which
+     *   runs {@code application.yaml}'s n-gram settings) is what the n-gram view itself changes.
+     *   The chunk context header cannot be isolated the same way -- it lives in the re-ingested
+     *   rows -- so both controls here see it.
+     */
+    @Nested
+    @Order(3)
+    @SpringBootTest
+    class HybridWithoutNgramAxis {
+        static final String LABEL = "hybrid | raw thresholds confirmed | weights 0.4/0.6 | ngram axis OFF";
+
+        @DynamicPropertySource
+        static void configuration(DynamicPropertyRegistry registry) {
+            OpenRouterEnv.openChatAndEmbedding(registry);
+            registry.add("app.search.mode", () -> "hybrid");
+            registry.add("app.rerank.enabled", () -> "false");
+            confirmedThresholdsAndWeights(registry);
+            registry.add("app.ngram.enabled", () -> "false");
+        }
+
+        @Autowired
+        private ChatService chatService;
+        @Autowired
+        private ConversationService conversationService;
+        @Autowired
+        private AnonymousUserService anonymousUserService;
+        @Autowired
+        private JdbcTemplate jdbcTemplate;
+        @Autowired
+        private AppProperties appProperties;
+
+        @Test
+        @DisplayName("[eval-usage-dashboard:AC-12] 대조 조합(hybrid, n-gram 축 비활성)을 실제 스윕해 세 번째 축의 효과를 분리한다")
+        void controlWithoutNgramAxisRuns() {
+            assertThat(appProperties.ngram().enabled()).isFalse();
+            for (SweepRun run : runSweep(LABEL, "control: confirmed thresholds/weights, n-gram axis disabled",
+                    chatService, conversationService, anonymousUserService, jdbcTemplate)) {
                 assertRowSanity(run.row(), run.label());
             }
         }

@@ -23,11 +23,13 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
+import art.insightai.chatbot.common.lang.Language;
 import art.insightai.chatbot.eval.evalset.EvalCase;
 import art.insightai.chatbot.eval.evalset.EvalSet;
 import art.insightai.chatbot.eval.evalset.EvalSetLoader;
 import art.insightai.chatbot.rag.domain.RetrievedChunk;
 import art.insightai.chatbot.rag.retrieval.Bm25SearchPort;
+import art.insightai.chatbot.rag.retrieval.NgramSearchPort;
 import art.insightai.chatbot.rag.retrieval.VectorSearchPort;
 import art.insightai.chatbot.support.DatabaseGuardExtension;
 
@@ -73,6 +75,7 @@ class EvalRawScoreDistributionTest {
         OpenRouterEnv.openEmbedding(registry);
         registry.add("app.search.bm25-raw-score-threshold", () -> "0.0");
         registry.add("app.search.vector-raw-score-threshold", () -> "0.0");
+        registry.add("app.ngram.raw-score-threshold", () -> "0.0");
     }
 
     @Autowired
@@ -80,10 +83,15 @@ class EvalRawScoreDistributionTest {
     @Autowired
     private VectorSearchPort vectorSearchPort;
 
+    // 2026-09-03: third axis (character n-gram view, V4 index / app.ngram.*) measured alongside
+    // the two original axes so its own raw threshold can be chosen from numbers, not guessed.
+    @Autowired
+    private NgramSearchPort ngramSearchPort;
+
     private record AxisRow(int rank, double score, boolean relevant, Object page, String preview) {
     }
 
-    private record QuestionResult(EvalCase evalCase, List<AxisRow> bm25, List<AxisRow> vector) {
+    private record QuestionResult(EvalCase evalCase, List<AxisRow> bm25, List<AxisRow> vector, List<AxisRow> ngram) {
         boolean found() {
             return evalCase instanceof EvalCase.Found;
         }
@@ -103,11 +111,20 @@ class EvalRawScoreDistributionTest {
         EvalSet evalSet = EvalSetLoader.load(EVAL_SET_PATH);
         List<QuestionResult> results = new ArrayList<>();
 
-        for (EvalCase evalCase : evalSet.cases()) {
+        for (EvalCase evalCase : koCases(evalSet)) {
             List<RetrievedChunk> bm25 = bm25SearchPort.search(evalCase.question(), AXIS_TOP_K);
             List<RetrievedChunk> vector = vectorSearchPort.search(evalCase.question(), AXIS_TOP_K);
-            results.add(new QuestionResult(evalCase, toRows(evalCase, bm25), toRows(evalCase, vector)));
+            List<RetrievedChunk> ngram = ngramSearchPort.search(evalCase.question(), AXIS_TOP_K);
+            results.add(new QuestionResult(evalCase, toRows(evalCase, bm25), toRows(evalCase, vector),
+                    toRows(evalCase, ngram)));
         }
+
+        // 2026-09-03: the report is written BEFORE the gate assertions -- a measurement that fails
+        // its gate is exactly the one whose numbers must be on disk to reason about.
+        Path file = REPORT_DIR.resolve("raw-score-distribution-" + LocalDate.now() + ".md");
+        Files.createDirectories(REPORT_DIR);
+        Files.writeString(file, render(results), StandardCharsets.UTF_8);
+        log.info("[eval raw-score] distribution written to {}", file);
 
         assertThat(results).hasSize(25);
         // every found question must retrieve something on the vector axis at threshold 0, or the
@@ -115,11 +132,6 @@ class EvalRawScoreDistributionTest {
         assertThat(results.stream().filter(QuestionResult::found).allMatch(r -> !r.vector().isEmpty()))
                 .as("every found question retrieved at least one chunk on the vector axis")
                 .isTrue();
-
-        Path file = REPORT_DIR.resolve("raw-score-distribution-" + LocalDate.now() + ".md");
-        Files.createDirectories(REPORT_DIR);
-        Files.writeString(file, render(results), StandardCharsets.UTF_8);
-        log.info("[eval raw-score] distribution written to {}", file);
     }
 
     /**
@@ -139,16 +151,20 @@ class EvalRawScoreDistributionTest {
         EvalSet evalSet = EvalSetLoader.load(EVAL_SET_PATH);
         double bm25Threshold = SweepConfirmedDefaults.BM25_RAW_SCORE_THRESHOLD;
         double vectorThreshold = SweepConfirmedDefaults.VECTOR_RAW_SCORE_THRESHOLD;
+        double ngramThreshold = SweepConfirmedDefaults.NGRAM_RAW_SCORE_THRESHOLD;
 
         assertThat(bm25Threshold).as("threshold must exclude the D1-spike 1.18 noise row").isGreaterThan(1.18);
 
         int excludedBm25 = 0;
         int excludedVector = 0;
-        for (EvalCase evalCase : evalSet.cases()) {
+        int excludedNgram = 0;
+        for (EvalCase evalCase : koCases(evalSet)) {
             List<AxisRow> bm25 = toRows(evalCase, bm25SearchPort.search(evalCase.question(), AXIS_TOP_K));
             List<AxisRow> vector = toRows(evalCase, vectorSearchPort.search(evalCase.question(), AXIS_TOP_K));
             excludedBm25 += (int) bm25.stream().filter(r -> r.score() < bm25Threshold).count();
             excludedVector += (int) vector.stream().filter(r -> r.score() < vectorThreshold).count();
+            List<AxisRow> ngram = toRows(evalCase, ngramSearchPort.search(evalCase.question(), AXIS_TOP_K));
+            excludedNgram += (int) ngram.stream().filter(r -> r.score() < ngramThreshold).count();
             if (evalCase instanceof EvalCase.Found) {
                 assertThat(bm25.stream().anyMatch(r -> r.relevant() && r.score() >= bm25Threshold))
                         .as("found question \"%s\" keeps a relevant chunk on the BM25 axis at threshold %s",
@@ -158,12 +174,28 @@ class EvalRawScoreDistributionTest {
                         .as("found question \"%s\" keeps a relevant chunk on the cosine axis at threshold %s",
                                 evalCase.question(), vectorThreshold)
                         .isTrue();
+                assertThat(ngram.stream().anyMatch(r -> r.relevant() && r.score() >= ngramThreshold))
+                        .as("found question \"%s\" keeps a relevant chunk on the n-gram axis at threshold %s",
+                                evalCase.question(), ngramThreshold)
+                        .isTrue();
             }
         }
         assertThat(excludedBm25).as("chunks the BM25 threshold actually excludes across 25 questions").isPositive();
         assertThat(excludedVector).as("chunks the cosine threshold actually excludes across 25 questions").isPositive();
+        assertThat(excludedNgram).as("chunks the n-gram threshold actually excludes across 25 questions").isPositive();
+        log.info("[eval raw-score] AC-10 n-gram axis at ngram>={}: excluded ngram={} (of 25x{})",
+                ngramThreshold, excludedNgram, AXIS_TOP_K);
         log.info("[eval raw-score] AC-10 at bm25>={} cosine>={}: excluded bm25={} cosine={} (of 25x{} per axis)",
                 bm25Threshold, vectorThreshold, excludedBm25, excludedVector, AXIS_TOP_K);
+    }
+
+    // 2026-09-03: the eval set carries 46 cases since the multilingual fixture (2026-09-02: 25 ko +
+    // 7 each en/ja/zh), but the two axis-native thresholds are calibrated on, and the "keeps a
+    // relevant chunk on the BM25 axis" gate only makes sense for, the Korean subset -- BM25 over a
+    // Korean-tokenized index cannot match a Chinese or English question at all. Same ko-only
+    // scoping EvalThresholdSweepIntegrationTest applies to its AC-9a row.
+    private static List<EvalCase> koCases(EvalSet evalSet) {
+        return evalSet.cases().stream().filter(evalCase -> evalCase.lang() == Language.KO).toList();
     }
 
     private static List<AxisRow> toRows(EvalCase evalCase, List<RetrievedChunk> chunks) {
@@ -184,12 +216,13 @@ class EvalRawScoreDistributionTest {
         sb.append("# D7 sweep stage 1 -- raw score distribution (BL-025 filters' input)\n\n");
         sb.append("Generated: ").append(OffsetDateTime.now()).append('\n');
         sb.append("Corpus: real indexed documents in chatbot-db; query embeddings: real bge-m3; ")
-                .append("axis top-k: ").append(AXIS_TOP_K).append("; both raw thresholds pinned to 0.0.\n\n");
+                .append("axis top-k: ").append(AXIS_TOP_K).append("; all three raw thresholds (bm25 / cosine / ngram) pinned to 0.0. ")
+                .append("Chunks carry the [출처: filename, p.N] context header and the index has the V4 n-gram view (2026-09-03).\n\n");
         sb.append("`relevant` = chunk text contains every expect_contains string (heuristic, found questions only).\n\n");
 
         sb.append("## Summary\n\n");
-        sb.append("| # | type | question | bm25 max | bm25 max relevant | cosine max | cosine max relevant |\n");
-        sb.append("|---|---|---|---|---|---|---|\n");
+        sb.append("| # | type | question | bm25 max | bm25 max relevant | cosine max | cosine max relevant | ngram max | ngram max relevant |\n");
+        sb.append("|---|---|---|---|---|---|---|---|---|\n");
         int n = 0;
         for (QuestionResult r : results) {
             n++;
@@ -200,12 +233,15 @@ class EvalRawScoreDistributionTest {
                     .append(" | ").append(r.found() ? fmt(r.maxRelevant(r.bm25())) : "-")
                     .append(" | ").append(fmt(r.max(r.vector())))
                     .append(" | ").append(r.found() ? fmt(r.maxRelevant(r.vector())) : "-")
+                    .append(" | ").append(fmt(r.max(r.ngram())))
+                    .append(" | ").append(r.found() ? fmt(r.maxRelevant(r.ngram())) : "-")
                     .append(" |\n");
         }
 
         sb.append("\n### Separation\n\n");
         appendSeparation(sb, "BM25 (pdb.score)", results, true);
         appendSeparation(sb, "cosine similarity", results, false);
+        appendNgramSeparation(sb, results);
 
         sb.append("\n## Per question (top ").append(ROWS_PER_AXIS_IN_REPORT).append(" per axis)\n\n");
         n = 0;
@@ -216,6 +252,7 @@ class EvalRawScoreDistributionTest {
             sb.append("| axis | rank | score | relevant | page | preview |\n|---|---|---|---|---|---|\n");
             appendAxis(sb, "bm25", r.bm25());
             appendAxis(sb, "cosine", r.vector());
+            appendAxis(sb, "ngram", r.ngram());
             sb.append('\n');
         }
         return sb.toString();
@@ -229,6 +266,25 @@ class EvalRawScoreDistributionTest {
         double notFoundMaxTop = results.stream().filter(r -> !r.found())
                 .mapToDouble(r -> r.max(bm25 ? r.bm25() : r.vector())).max().orElse(0.0);
         sb.append("- **").append(label).append("** -- found: min over questions of top-1 = ")
+                .append(fmt(foundMinTop)).append(", min over questions of best *relevant* chunk = ")
+                .append(fmt(foundMinRelevant)).append(" / not_found: max over questions of top-1 = ")
+                .append(fmt(notFoundMaxTop)).append(". A threshold strictly between ")
+                .append(fmt(notFoundMaxTop)).append(" and ").append(fmt(foundMinRelevant))
+                .append(notFoundMaxTop < foundMinRelevant ? " separates the two sets on this axis." : " does NOT exist -- the sets overlap on this axis.")
+                .append('\n');
+    }
+
+    // 2026-09-03: same separation summary for the n-gram view (kept as its own method rather
+    // than widening appendSeparation's boolean selector, so the two original axes' lines stay
+    // byte-for-byte comparable with the 2026-09-01 report).
+    private static void appendNgramSeparation(StringBuilder sb, List<QuestionResult> results) {
+        double foundMinRelevant = results.stream().filter(QuestionResult::found)
+                .mapToDouble(r -> r.maxRelevant(r.ngram())).min().orElse(0.0);
+        double foundMinTop = results.stream().filter(QuestionResult::found)
+                .mapToDouble(r -> r.max(r.ngram())).min().orElse(0.0);
+        double notFoundMaxTop = results.stream().filter(r -> !r.found())
+                .mapToDouble(r -> r.max(r.ngram())).max().orElse(0.0);
+        sb.append("- **n-gram (pdb.score, content_ngram view)** -- found: min over questions of top-1 = ")
                 .append(fmt(foundMinTop)).append(", min over questions of best *relevant* chunk = ")
                 .append(fmt(foundMinRelevant)).append(" / not_found: max over questions of top-1 = ")
                 .append(fmt(notFoundMaxTop)).append(". A threshold strictly between ")
