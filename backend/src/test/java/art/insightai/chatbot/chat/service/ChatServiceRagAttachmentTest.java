@@ -40,6 +40,7 @@ import art.insightai.chatbot.common.config.TestAppPropertiesFactory;
 import art.insightai.chatbot.rag.domain.RetrievedChunk;
 import art.insightai.chatbot.rag.retrieval.Bm25SearchPort;
 import art.insightai.chatbot.rag.retrieval.HybridDocumentRetriever;
+import art.insightai.chatbot.rag.retrieval.NgramSearchPort;
 import art.insightai.chatbot.rag.retrieval.RagAdvisorConfig;
 import art.insightai.chatbot.rag.retrieval.RagAdvisorPair;
 import art.insightai.chatbot.rag.retrieval.RagEmptyContextGuardAdvisor;
@@ -214,7 +215,7 @@ class ChatServiceRagAttachmentTest {
         RerankPort rerankPort = mock(RerankPort.class);
         when(bm25SearchPort.search(anyString(), anyInt())).thenThrow(new RuntimeException("DB connection lost"));
         HybridDocumentRetriever hybridDocumentRetriever = new HybridDocumentRetriever(
-                vectorSearchPort, bm25SearchPort, reciprocalRankFusion, rerankPort,
+                vectorSearchPort, bm25SearchPort, mock(NgramSearchPort.class), reciprocalRankFusion, rerankPort,
                 TestAppPropertiesFactory.valid());
         // no StubChatModel script is enqueued -- this test asserts the model is never reached
         // (RagEmptyContextGuardAdvisor short-circuits on the empty document list T7's fallback

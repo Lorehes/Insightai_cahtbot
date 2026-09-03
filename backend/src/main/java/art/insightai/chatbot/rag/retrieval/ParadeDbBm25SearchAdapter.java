@@ -1,15 +1,9 @@
 package art.insightai.chatbot.rag.retrieval;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 
-import org.springframework.boot.json.JsonParseException;
-import org.springframework.boot.json.JsonParser;
-import org.springframework.boot.json.JsonParserFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
@@ -137,16 +131,16 @@ public class ParadeDbBm25SearchAdapter implements Bm25SearchPort {
     private static final String EXCLUSION_PREDICATE_TEMPLATE = "metadata->>'document_id' NOT IN (%s)";
 
     private final JdbcTemplate jdbcTemplate;
-    private final JsonParser jsonParser;
     private final NonIndexedDocumentLookup nonIndexedDocumentLookup;
     private final GlossaryTermMatcher glossaryTermMatcher;
+    // Row mapping moved to ParadeDbChunkRowMapper (2026-09-03) so the n-gram axis shares it.
+    private final ParadeDbChunkRowMapper rowMapper = new ParadeDbChunkRowMapper();
 
     public ParadeDbBm25SearchAdapter(
             JdbcTemplate jdbcTemplate,
             NonIndexedDocumentLookup nonIndexedDocumentLookup,
             GlossaryTermMatcher glossaryTermMatcher) {
         this.jdbcTemplate = jdbcTemplate;
-        this.jsonParser = JsonParserFactory.getJsonParser();
         this.nonIndexedDocumentLookup = nonIndexedDocumentLookup;
         this.glossaryTermMatcher = glossaryTermMatcher;
     }
@@ -193,7 +187,7 @@ public class ParadeDbBm25SearchAdapter implements Bm25SearchPort {
         params.add(topK);
 
         String sql = BM25_SEARCH_SQL.replace("ORDER BY", predicates + "ORDER BY");
-        return jdbcTemplate.query(sql, this::mapRow, params.toArray());
+        return jdbcTemplate.query(sql, rowMapper, params.toArray());
     }
 
     /**
@@ -207,38 +201,4 @@ public class ParadeDbBm25SearchAdapter implements Bm25SearchPort {
         return nonIndexedDocumentLookup.findAll().stream().map(NonIndexedDocument::id).toList();
     }
 
-    /**
-     * [Purpose] Maps one result row to this project's axis-agnostic {@link RetrievedChunk}.
-     * [Caution] {@code metadata} arrives as a JSON text string (the column type is {@code json},
-     *   not {@code jsonb}); a null column value maps to an empty map rather than a null
-     *   {@link RetrievedChunk#metadata()} so downstream consumers (T7, T8) never need a null
-     *   check that {@link VectorStoreSearchAdapter}'s callers don't need either.
-     */
-    private RetrievedChunk mapRow(ResultSet rs, int rowNum) throws SQLException {
-        return new RetrievedChunk(
-                rs.getString("id"),
-                rs.getString("content"),
-                parseMetadata(rs.getString("metadata")),
-                rs.getDouble("score"));
-    }
-
-    /**
-     * [Purpose] Parses the {@code metadata} column's raw JSON text into a {@code Map}.
-     * [Caution] A malformed JSON value here would mean {@code vector_store_bgem3} rows were
-     *   written by something other than {@code PgVectorStore}/this project's own ingestion path
-     *   (document-ingestion Spec) — surfaced as an unchecked exception rather than silently
-     *   dropped metadata, since callers (T8's {@code SourceRef} mapping) rely on
-     *   {@code document_id}/{@code filename} being present.
-     */
-    private Map<String, Object> parseMetadata(String metadataJson) {
-        if (metadataJson == null) {
-            return Map.of();
-        }
-        try {
-            return jsonParser.parseMap(metadataJson);
-        } catch (JsonParseException e) {
-            throw new IllegalStateException(
-                    "Malformed metadata JSON in vector_store_bgem3 row", e);
-        }
-    }
 }

@@ -104,12 +104,19 @@ public final class TestAppPropertiesFactory {
                 new AppProperties.Chat(new AppProperties.Chat.Memory(40), Duration.ofMinutes(5));
         // Empty by default: no phrase constraint is added to the BM25 query unless a test opts in.
         private AppProperties.Glossary glossary = new AppProperties.Glossary(List.of());
+        // Disabled by default so the two-axis fused-score arithmetic existing tests derive stays exact.
+        private AppProperties.Ngram ngram = new AppProperties.Ngram(false, 0.2, 20, 0.0);
 
         private Builder() {
         }
 
         public Builder glossary(AppProperties.Glossary glossary) {
             this.glossary = glossary;
+            return this;
+        }
+
+        public Builder ngram(AppProperties.Ngram ngram) {
+            this.ngram = ngram;
             return this;
         }
 
@@ -149,7 +156,7 @@ public final class TestAppPropertiesFactory {
         }
 
         public AppProperties build() {
-            return new AppProperties(auth, search, rerank, ingest, session, models, chat, glossary);
+            return new AppProperties(auth, search, rerank, ingest, session, models, chat, glossary, ngram);
         }
     }
 }

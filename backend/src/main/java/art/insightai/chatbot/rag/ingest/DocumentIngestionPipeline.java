@@ -188,7 +188,9 @@ public class DocumentIngestionPipeline {
                 throw new IllegalStateException(
                         "Document " + documentId + " produced no chunk after parsing");
             }
-            chunkMetadataBuilder.build(chunks, document);
+            // Since 2026-09-03 build() returns new Document instances (the context header is
+            // prepended to each chunk's text), so the result must be captured, not discarded.
+            chunks = chunkMetadataBuilder.build(chunks, document);
 
             clientErrorMessage = INDEX_FAILURE_MESSAGE;
             statusTransitioner.transitionTo(documentId, DocumentStatus.EMBEDDING);

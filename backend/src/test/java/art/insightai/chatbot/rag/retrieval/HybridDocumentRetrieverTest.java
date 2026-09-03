@@ -94,8 +94,10 @@ class HybridDocumentRetrieverTest {
 
     private HybridDocumentRetriever retriever(AppProperties.Search search) {
         AppProperties appProperties = TestAppPropertiesFactory.builder().search(search).build();
+        // n-gram axis is disabled in TestAppPropertiesFactory's defaults, so this mock is never called
         return new HybridDocumentRetriever(
-                vectorSearchPort, bm25SearchPort, reciprocalRankFusion, rerankPort, appProperties);
+                vectorSearchPort, bm25SearchPort, mock(NgramSearchPort.class), reciprocalRankFusion, rerankPort,
+                appProperties);
     }
 
     private static RetrievedChunk chunk(String id, double score) {

@@ -1,5 +1,6 @@
 package art.insightai.chatbot.rag.ingest;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -89,14 +90,22 @@ public class ChunkMetadataBuilder {
             List<org.springframework.ai.document.Document> chunks, Document document) {
         UUID documentId = document.getId();
         String filename = document.getFilename();
+        List<org.springframework.ai.document.Document> stamped = new ArrayList<>(chunks.size());
         for (int i = 0; i < chunks.size(); i++) {
-            org.springframework.ai.document.Document chunk = chunks.get(i);
+            Integer page = resolvePage(chunks.get(i));
+            // The header copy is built BEFORE the nullable `page` key is stamped: Document's
+            // builder/constructor rejects null metadata values ("metadata cannot have null
+            // values"), whereas putting into getMetadata() afterwards does not -- which is how
+            // the original in-place code has always carried a null page for non-PDF chunks.
+            org.springframework.ai.document.Document chunk = chunks.get(i).mutate()
+                    .text(contextHeader(filename, page) + chunks.get(i).getText())
+                    .build();
             chunk.getMetadata().put(KEY_DOCUMENT_ID, documentId.toString());
             chunk.getMetadata().put(KEY_FILENAME, filename);
             chunk.getMetadata().put(KEY_CHUNK_INDEX, i);
             chunk.getMetadata().put(KEY_DEPT, DEPT_ALL);
             chunk.getMetadata().put(KEY_ACL, ACL_ALL);
-            chunk.getMetadata().put(KEY_PAGE, resolvePage(chunk));
+            chunk.getMetadata().put(KEY_PAGE, page);
             // Batch review 2026-09-01 Medium-2: once the page number is promoted to AC-8's own
             // `page` key, the PDF reader's raw keys are removed. Left in place they reach two
             // sinks they don't belong in: the EMBED-mode formatted content (BL-023 proved
@@ -108,8 +117,40 @@ public class ChunkMetadataBuilder {
             chunk.getMetadata().remove(PagePdfDocumentReader.METADATA_END_PAGE_NUMBER);
             chunk.getMetadata().remove(PagePdfDocumentReader.METADATA_FILE_NAME);
             excludeNullablePageFromFormatting(chunk);
+            stamped.add(chunk);
         }
-        return chunks;
+        return stamped;
+    }
+
+    /**
+     * [Purpose] Builds the one-line context header prepended to every chunk's text (2026-09-03,
+     *   multilingual-RAG playbook §2-6 "문맥 헤더", user-approved item 5).
+     * [Rationale] A chunk cut out of the middle of a document carries no signal about which
+     *   document it came from in the places that matter most here: the ParadeDB {@code content}
+     *   column (both keyword views index text only, never metadata) and the LLM context
+     *   ({@code NonceBoundaryContextAugmenter} renders {@code getText()}). The embedding input
+     *   already carried {@code filename} via the EMBED-mode metadata formatter (BL-023), so for the
+     *   vector axis this adds mainly the page; for BM25 it adds the filename's tokens (company name
+     *   and document type, here) for the first time; for the model and the {@code sources} panel it
+     *   adds a citation the reader can match against the document list. One string inside the
+     *   text serves all three consumers without a second storage path, which is why this is text
+     *   rather than another metadata key. Korean label because the corpus and the users are
+     *   Korean; the filename is left exactly as uploaded.
+     * [Side effects] Every stored chunk's {@code content} changes, so existing rows must be
+     *   re-ingested for the header to exist, and the BM25 score distribution shifts (the header's
+     *   tokens recur in every chunk of a document -- near-zero IDF, harmless -- but the token
+     *   count per chunk rises). The axis thresholds were re-swept after this change.
+     * [Caution] {@link org.springframework.ai.document.Document#mutate()} returns a new instance
+     *   (id, metadata, media, score carried over) and does not copy the content formatter, so the
+     *   formatter is re-applied to the new instance and callers must use the list {@link #build}
+     *   returns, never the input list -- {@code DocumentIngestionPipeline} was changed to do so.
+     */
+    private static String contextHeader(String filename, Integer page) {
+        StringBuilder header = new StringBuilder("[출처: ").append(filename);
+        if (page != null) {
+            header.append(", p.").append(page);
+        }
+        return header.append("]\n").toString();
     }
 
     /**

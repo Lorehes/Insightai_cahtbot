@@ -41,6 +41,7 @@ public class ReciprocalRankFusion {
     private final int rrfK;
     private final double weightBm25;
     private final double weightVector;
+    private final double weightNgram;
     private final double scoreThreshold;
 
     public ReciprocalRankFusion(AppProperties appProperties) {
@@ -48,6 +49,7 @@ public class ReciprocalRankFusion {
         this.rrfK = search.rrfK();
         this.weightBm25 = search.weightBm25();
         this.weightVector = search.weightVector();
+        this.weightNgram = appProperties.ngram().weight();
         this.scoreThreshold = search.scoreThreshold();
     }
 
@@ -60,11 +62,32 @@ public class ReciprocalRankFusion {
      *   not an AC guarantee.
      */
     public List<RetrievedChunk> fuse(List<RetrievedChunk> bm25Results, List<RetrievedChunk> vectorResults) {
+        return fuse(bm25Results, vectorResults, List.of());
+    }
+
+    /**
+     * [Purpose] Three-axis fusion (2026-09-03): the n-gram keyword view ({@link NgramSearchPort})
+     *   joins as its own ranked list with its own weight ({@code app.ngram.weight}).
+     * [Rationale] RRF is rank-only, so the n-gram view's ~3x larger {@code pdb.score} scale never
+     *   touches the arithmetic -- the reason it is fused as an axis instead of being merged into the
+     *   BM25 list by raw score (probe report §4). The two-argument overload above delegates here
+     *   with an empty third list so every existing caller and test keeps the exact two-axis sums;
+     *   {@code HybridDocumentRetriever} only calls this overload when {@code app.ngram.enabled}.
+     * [Caution] A chunk present on all three axes now reaches
+     *   {@code (wBm25 + wVector + wNgram) / (rrfK + 1)}, above the two-axis ceiling the
+     *   {@code scoreThreshold} comments elsewhere quote; that threshold is 0.0 (disabled) and
+     *   BL-025 already ruled it out as a relevance filter, so nothing depends on the old ceiling.
+     */
+    public List<RetrievedChunk> fuse(
+            List<RetrievedChunk> bm25Results,
+            List<RetrievedChunk> vectorResults,
+            List<RetrievedChunk> ngramResults) {
         Map<String, RetrievedChunk> chunksById = new LinkedHashMap<>();
         Map<String, Double> scoresById = new LinkedHashMap<>();
 
         accumulate(bm25Results, weightBm25, chunksById, scoresById);
         accumulate(vectorResults, weightVector, chunksById, scoresById);
+        accumulate(ngramResults, weightNgram, chunksById, scoresById);
 
         return scoresById.entrySet().stream()
                 .filter(entry -> entry.getValue() >= scoreThreshold)

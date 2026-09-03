@@ -99,19 +99,28 @@ public class HybridDocumentRetriever {
      *   rule mandates either style (2026-08-28 review Low-4).
      */
     private final AppProperties.Search searchProperties;
+    /**
+     * [Purpose] The n-gram keyword axis (2026-09-03, option B of the user-dictionary probe) and
+     *   its own settings; consulted only in HYBRID mode and only when {@code enabled}.
+     */
+    private final NgramSearchPort ngramSearchPort;
+    private final AppProperties.Ngram ngramProperties;
 
     public HybridDocumentRetriever(
             VectorSearchPort vectorSearchPort,
             Bm25SearchPort bm25SearchPort,
+            NgramSearchPort ngramSearchPort,
             ReciprocalRankFusion reciprocalRankFusion,
             RerankPort rerankPort,
             AppProperties appProperties
     ) {
         this.vectorSearchPort = vectorSearchPort;
         this.bm25SearchPort = bm25SearchPort;
+        this.ngramSearchPort = ngramSearchPort;
         this.reciprocalRankFusion = reciprocalRankFusion;
         this.rerankPort = rerankPort;
         this.searchProperties = appProperties.search();
+        this.ngramProperties = appProperties.ngram();
     }
 
     /**
@@ -190,7 +199,16 @@ public class HybridDocumentRetriever {
         List<RetrievedChunk> vectorResults = dropBelowRawThreshold(
                 vectorSearchPort.search(query, searchProperties.vectorTopK()),
                 searchProperties.vectorRawScoreThreshold());
-        return reciprocalRankFusion.fuse(bm25Results, vectorResults);
+        if (!ngramProperties.enabled()) {
+            return reciprocalRankFusion.fuse(bm25Results, vectorResults);
+        }
+        // Third axis (2026-09-03): its own top-k and its own raw threshold, because the n-gram
+        // view's pdb.score scale is ~3x the lindera view's (probe report §4) -- never reuse
+        // bm25RawScoreThreshold here.
+        List<RetrievedChunk> ngramResults = dropBelowRawThreshold(
+                ngramSearchPort.search(query, ngramProperties.topK()),
+                ngramProperties.rawScoreThreshold());
+        return reciprocalRankFusion.fuse(bm25Results, vectorResults, ngramResults);
     }
 
     /**

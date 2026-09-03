@@ -152,6 +152,23 @@ app:
       - 인사이트에이아이
       - InsightAI
       - 인사이트AI
+  ngram:
+    # ── 세 번째 검색 축: 문자 2~3-gram BM25 (2026-09-03, 사용자 사전 대체안 B) ──
+    # V4 마이그레이션이 같은 paradedb 인덱스에 content_ngram 뷰(alias)를 추가한다. 형태소 분석기가
+    # 사전에 없는 고유명사·제품코드·오타를 놓칠 때 글자 조각 일치로 잡는 축이며, RRF 에 세 번째
+    # 리스트로 들어간다(HybridDocumentRetriever → ReciprocalRankFusion 3-인자). enabled=false 면
+    # 질의도 융합도 하지 않아 두 축 산식이 그대로다. V4 를 롤백하면 반드시 false 로 내린다.
+    # 점수 스케일이 형태소 뷰의 약 3배라 raw-score-threshold 는 이 축 전용이다 — 1.3 을 복사하지 말 것.
+    # weight 는 낮게 둔다(총람 §4-3): n-gram 매치는 형태소보다 잡음이 커서 벡터 축을 이겨서는 안 된다.
+    # D7 재스윕 1단계(docs/eval/raw-score-distribution-2026-09-03.md, ko 25문항): '있는 질문'의 정답 청크
+    # 최저 n-gram 원점수 2.1528, '없는 질문' top-1 최고 21.69 — 두 축과 같이 분리선은 없고 노이즈 하한만
+    # 둔다. 1.5 는 정답 최저(2.15)에 여유 0.65 를 두고 그 아래 꼬리만 자르는 값이다(BM25 의 1.3 과 같은
+    # 논리). SweepConfirmedDefaults·SearchDefaultsReflectSweepTest 가 이 네 값을 고정한다.
+    # weight 0.2 는 실측 근거가 없는 잠정값이다 — 2단계 스윕에서 축 on/off 만 비교했다.
+    enabled: true
+    weight: 0.2
+    top-k: 20
+    raw-score-threshold: 1.5
   rerank:
     enabled: false
     model: ${RERANK_MODEL:cohere/rerank-v3.5}

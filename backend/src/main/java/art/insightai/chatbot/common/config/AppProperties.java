@@ -28,8 +28,52 @@ public record AppProperties(
         @DefaultValue Session session,
         @DefaultValue Models models,
         @DefaultValue Chat chat,
-        @DefaultValue Glossary glossary
+        @DefaultValue Glossary glossary,
+        @DefaultValue Ngram ngram
 ) {
+
+    /**
+     * [Purpose] The third retrieval axis: character n-gram BM25 over the {@code content_ngram}
+     *   view that {@code V4__add_ngram_view_to_bm25_index.sql} adds to the ParadeDB index.
+     * [Rationale] Option B of {@code DOC_ROOT/docs/eval/paradedb-user-dictionary-probe-2026-09-03.md}
+     *   (user-approved 2026-09-03 together with the chunk context header). The lindera axis cannot
+     *   see a proper noun, product code, or typo that its embedded dictionary does not know; a
+     *   2-3-gram view matches such strings by character overlap regardless (probe §4: the exact
+     *   answer chunk only, for both {@code 인사이트에이아이} and {@code ES-2024-A}, and the answer
+     *   still first for the typo {@code 인사이트에이아리}). It is fused as its own axis through
+     *   {@link art.insightai.chatbot.rag.retrieval.ReciprocalRankFusion} rather than merged into the
+     *   BM25 axis because its {@code pdb.score} scale is roughly three times lindera's (probe §4),
+     *   so the two cannot share {@link Search#bm25RawScoreThreshold()} -- hence its own
+     *   {@code rawScoreThreshold}, and its own {@code weight} because an n-gram match-any query is
+     *   noisier than a morphological one and must not outvote the vector axis (playbook §4-3:
+     *   "낮은 가중치"). Top-level component for the same reason as {@link Glossary}: {@link Search}'s
+     *   positional constructor has nine test call sites.
+     * [Caution] {@code enabled=false} makes {@code HybridDocumentRetriever} skip the axis entirely
+     *   (no query, no fusion contribution) so the two-axis fused-score arithmetic every existing
+     *   test derives stays exact. Requires the V4 index; if V4 is rolled back, set this to false
+     *   or every hybrid search fails on the missing alias. {@code rawScoreThreshold} is on the
+     *   n-gram {@code pdb.score} scale, not lindera's -- never copy the 1.3 across.
+     */
+    public record Ngram(
+            @DefaultValue("false") boolean enabled,
+            @DefaultValue("0.2") double weight,
+            @DefaultValue("20") int topK,
+            @DefaultValue("0.0") double rawScoreThreshold
+    ) {
+        public Ngram {
+            if (Double.isNaN(rawScoreThreshold) || rawScoreThreshold < 0.0) {
+                throw new IllegalArgumentException(
+                        "app.ngram.raw-score-threshold must be a non-negative number, but was " + rawScoreThreshold);
+            }
+            if (Double.isNaN(weight) || weight < 0.0) {
+                throw new IllegalArgumentException(
+                        "app.ngram.weight must be a non-negative number, but was " + weight);
+            }
+            if (topK < 1) {
+                throw new IllegalArgumentException("app.ngram.top-k must be at least 1, but was " + topK);
+            }
+        }
+    }
 
     /**
      * [Purpose] The project's own proper-noun list (company names, product names, aliases,
