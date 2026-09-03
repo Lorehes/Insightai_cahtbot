@@ -3,6 +3,7 @@ package art.insightai.chatbot.rag.retrieval;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.rag.Query;
 import org.springframework.ai.rag.preretrieval.query.transformation.CompressionQueryTransformer;
 import org.springframework.ai.rag.preretrieval.query.transformation.QueryTransformer;
@@ -140,6 +141,46 @@ class HistoryAwareCompressionQueryTransformer implements QueryTransformer {
      *   package-private message constants).
      */
     static final int MAX_COMPRESSED_QUERY_LENGTH = 500;
+
+    /**
+     * [Purpose] The prompt the library delegate uses to rewrite a follow-up turn into a
+     *   standalone query, with the output language pinned to the follow-up's own language.
+     * [Rationale] {@link CompressionQueryTransformer}'s {@code DEFAULT_PROMPT_TEMPLATE}
+     *   (spring-ai-rag 2.0.1 source, lines 49-61) says nothing about output language, so a
+     *   Korean follow-up can be rewritten in English -- the prompt itself is English, and models
+     *   tend to answer in the prompt's language when unconstrained. An English standalone query
+     *   then hits the BM25 axis (Korean-tokenized {@code pdb.lindera(korean)} index, {@code
+     *   ParadeDbBm25SearchAdapter}) with zero matches and weakens the vector axis to its
+     *   cross-lingual alignment, silently degrading exactly the multi-turn path AC-9 exists for.
+     *   Nothing downstream logs the rewritten text, so the failure is invisible without this
+     *   pin. The first three sentences and the {@code history}/{@code query} layout are the
+     *   library default verbatim (the delegate's constructor asserts both placeholders); only
+     *   the two language/identifier sentences are added. Identifiers are pinned for the same
+     *   BM25 reason: a rewrite that "helpfully" normalizes {@code ES-2024-A} to {@code ES 2024 A}
+     *   loses the exact-match hit that is the hybrid axis's reason to exist (hybrid-rag:AC-13).
+     *   Multilingual-RAG playbook §5-7 (2026-09-03).
+     * [Caution] Package-private so {@link RagAdvisorConfig#compressionQueryTransformer} can pass
+     *   it to the builder while this class stays the single owner of every compression concern
+     *   (guard, fallback, sanitize, and now the prompt) -- {@code RagAdvisorConfig} is
+     *   "assembly only" by its own Javadoc.
+     * [AC] hybrid-rag:AC-9
+     */
+    static final PromptTemplate COMPRESSION_PROMPT_TEMPLATE = new PromptTemplate("""
+            Given the following conversation history and a follow-up query, your task is to synthesize
+            a concise, standalone query that incorporates the context from the history.
+            Ensure the standalone query is clear, specific, and maintains the user's intent.
+            Write the standalone query in the same language as the follow-up query (for example,
+            a Korean follow-up query must yield a Korean standalone query).
+            Keep proper nouns, product codes, and identifiers exactly as written in the follow-up query.
+
+            Conversation history:
+            {history}
+
+            Follow-up query:
+            {query}
+
+            Standalone query:
+            """);
 
     /**
      * [Rationale] {@code spring-ai-rag} 2.0.1's own logger types ({@code

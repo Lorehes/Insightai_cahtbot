@@ -213,8 +213,13 @@ public class RagAdvisorConfig {
      */
     @Bean
     public QueryTransformer compressionQueryTransformer(ChatClient.Builder chatClientBuilder) {
-        CompressionQueryTransformer delegate =
-                CompressionQueryTransformer.builder().chatClientBuilder(chatClientBuilder).build();
+        // 2026-09-03: the prompt is no longer the library default -- see
+        // HistoryAwareCompressionQueryTransformer.COMPRESSION_PROMPT_TEMPLATE's [Rationale] for
+        // why the output language and identifiers are pinned there (still assembly-only here).
+        CompressionQueryTransformer delegate = CompressionQueryTransformer.builder()
+                .chatClientBuilder(chatClientBuilder)
+                .promptTemplate(HistoryAwareCompressionQueryTransformer.COMPRESSION_PROMPT_TEMPLATE)
+                .build();
         return new HistoryAwareCompressionQueryTransformer(delegate);
     }
 
