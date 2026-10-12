@@ -8,7 +8,7 @@
 ## DOC_ROOT
 
 ```
-DOC_ROOT: Z:\Work\02.insight-chat
+DOC_ROOT: <your-local-doc-folder>
 ```
 
 전역 규약의 해석 순서 1번(프로젝트 CLAUDE.md 명시)에 해당하므로, 이하 규칙은 보지 않는다.
